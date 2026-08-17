@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "276495707416",
+    "project_id": "gestione-aule-f9286",
+    "storage_bucket": "gestione-aule-f9286.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:276495707416:android:3a13b170b945afc2bf426d",
+        "android_client_info": {
+          "package_name": "com.gestioneauledbalex.GestioneAule"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCDqhCcWxW9PnV6bbP1briH79pRFSoUkOE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
