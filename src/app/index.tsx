@@ -4477,9 +4477,15 @@ export default function App() {
               <View style={styles.fasceGrid}>
                 {FASCE_ORARIE.map(fascia => {
                   const occupata = prenotazioni.some((p) => p.aulaId === aulaInPrenotazione?.id && p.data === dataPrenotazione && p.stato !== 'Rifiutata' && p.fasce.includes(fascia));
+                  // Se la data selezionata è quella odierna, blocca le fasce il cui
+                  // orario di inizio è già passato rispetto all'ora attuale, così
+                  // via via che passano le ore quelle fasce diventano intoccabili.
+                  const orarioInizioFascia = fascia.split('-')[0]; // es. "08:00"
+                  const oraAttualeStr = new Date().toTimeString().slice(0, 5); // "HH:MM" locale
+                  const passata = dataPrenotazione === oggiStr && orarioInizioFascia <= oraAttualeStr;
                   const selezionata = fasceSelezionate.includes(fascia);
                   return (
-                    <TouchableOpacity key={fascia} disabled={occupata} style={[styles.fasciaChip, selezionata && styles.fasciaSelected, occupata && styles.fasciaOccupata]} onPress={() => toggleFascia(fascia)}>
+                    <TouchableOpacity key={fascia} disabled={occupata || passata} style={[styles.fasciaChip, selezionata && styles.fasciaSelected, (occupata || passata) && styles.fasciaOccupata]} onPress={() => toggleFascia(fascia)}>
                       <Text style={[styles.fasciaText, selezionata && styles.fasciaTextSelected]}>{fascia}</Text>
                     </TouchableOpacity>
                   );
