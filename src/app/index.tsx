@@ -3521,7 +3521,12 @@ export default function App() {
               <Text style={styles.langTextHeader}>{lang === 'it' ? 'العربية' : 'Italiano'}</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView contentContainerStyle={[styles.authCenter, { paddingVertical: 20 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+          >
+          <ScrollView contentContainerStyle={[styles.authCenter, { paddingVertical: 20, justifyContent: 'flex-start' }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <AppLogo style={Platform.OS === 'web' ? { width: 200, height: 70, alignSelf: 'center' } : { width: '65%', maxWidth: 200, aspectRatio: 200 / 70, alignSelf: 'center' }} />
             <Text style={[styles.appName, { marginBottom: 8 }]}>{t('completaProfilo', lang)}</Text>
             <Text style={[styles.infoText, { marginBottom: 16 }]}>{t('scegliTipo', lang)}</Text>
@@ -3598,6 +3603,7 @@ export default function App() {
               <Text style={styles.switchAuthText}>{t('esci', lang)}</Text>
             </TouchableOpacity>
           </ScrollView>
+          </KeyboardAvoidingView>
         </View>
 
         {/* Modale Scegli Classe (registrazione / completamento profilo) */}
@@ -6401,7 +6407,11 @@ export default function App() {
 
       {/* Modale Modifica Profilo (da sezione Profili) */}
       <Modal visible={!!utenteProfiloModifica} animationType="slide" transparent onRequestClose={() => { setUtenteProfiloModifica(null); setProfiloModificaDati({}); }}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+        >
           <View style={styles.modalContentFixed}>
             <View style={styles.modalHeaderFixed}>
               <Text style={styles.modalTitle}>{canModificareProfili ? t('modificaProfilo', lang) : t('profiloPersonale', lang)}</Text>
@@ -6600,7 +6610,7 @@ export default function App() {
               </TouchableOpacity>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modale Impostazioni Avanzate – Permessi (tabella semplice) */}
@@ -6755,7 +6765,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     paddingTop: 12,
   },
   authCenter: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     paddingHorizontal: 24,
     paddingTop: Platform.OS === 'web' ? 56 : 16,
