@@ -1169,6 +1169,8 @@ export default function App() {
   const { width: winWidth } = useWindowDimensions();
   const watermarkSize = Math.min(560, Math.max(220, winWidth * 0.68));
   const watermarkOffset = -(watermarkSize * (160 / 560));
+  // Offset verticale ridotto rispetto a quello orizzontale: alza il logo così se ne vede di più
+  const watermarkOffsetY = -(watermarkSize * (80 / 560));
 
   // ---- STATI AUTENTICAZIONE ----
   const [email, setEmail] = useState('');
@@ -3524,9 +3526,20 @@ export default function App() {
           <KeyboardAvoidingView
             style={{ flex: 1 }}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 80}
           >
-          <ScrollView contentContainerStyle={[styles.authCenter, { paddingVertical: 20, justifyContent: 'flex-start' }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            contentContainerStyle={[
+              styles.authCenter,
+              {
+                paddingTop: 20,
+                paddingBottom: Platform.OS === 'android' ? 40 + insets.bottom : 90,
+                justifyContent: 'flex-start',
+              },
+            ]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             <AppLogo style={Platform.OS === 'web' ? { width: 200, height: 70, alignSelf: 'center' } : { width: '65%', maxWidth: 200, aspectRatio: 200 / 70, alignSelf: 'center' }} />
             <Text style={[styles.appName, { marginBottom: 8 }]}>{t('completaProfilo', lang)}</Text>
             <Text style={[styles.infoText, { marginBottom: 16 }]}>{t('scegliTipo', lang)}</Text>
@@ -3769,7 +3782,7 @@ export default function App() {
       <View style={{ flex: 1 }}>
         <Image
           source={LOGO_WATERMARK}
-          style={[styles.contentWatermark, { width: watermarkSize, height: watermarkSize, right: watermarkOffset, bottom: watermarkOffset }]}
+          style={[styles.contentWatermark, { width: watermarkSize, height: watermarkSize, right: watermarkOffset, bottom: watermarkOffsetY }]}
           pointerEvents="none"
           resizeMode="contain"
         />
