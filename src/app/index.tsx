@@ -47,6 +47,10 @@ const SFONDO_LOGIN = require('../../assets/sfondo-login.jpg');
 const SFONDO_LOGIN_MOBILE = require('../../assets/sfondo-login-mobile.png');
 const LOGO_WATERMARK = require('../../assets/logo-watermark.png');
 
+// Link fisso: punta sempre all'ultima release pubblicata su GitHub,
+// a patto che il nome del file APK resti identico ad ogni aggiornamento.
+const APK_DOWNLOAD_URL = 'https://github.com/georgesamirsobhi-ctrl/gestione-aule-dbalex./releases/latest/download/application-46bc2bf2-a990-48d0-8dcb-51b876c7336a.apk';
+
 // ---- COSTANTI ESISTENTI ----
 const SEZIONI_INIZIALI = ['Scuola Base', 'Scuola Media', 'Scuola Professionale', 'Comuni'];
 const FASCE_ORARIE = [
@@ -1176,6 +1180,8 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mostraPassword, setMostraPassword] = useState(false);
+  const [showDownloadChoice, setShowDownloadChoice] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
   const [nome, setNome] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -3429,11 +3435,65 @@ export default function App() {
               {Platform.OS === 'web' && (
                 <TouchableOpacity
                   style={styles.androidDownloadBanner}
-                  onPress={() => Linking.openURL('https://github.com/georgesamirsobhi-ctrl/gestione-aule-dbalex./releases/download/v1.0.0/application-46bc2bf2-a990-48d0-8dcb-51b876c7336a.apk')}
+                  onPress={() => setShowDownloadChoice(true)}
                 >
                   <Text style={styles.androidDownloadBannerTitle}>{t('scaricaAppAndroidTitolo', lang)}</Text>
                   <Text style={styles.androidDownloadBannerButton}>{t('scaricaAppAndroidPulsante', lang)}</Text>
                 </TouchableOpacity>
+              )}
+              {Platform.OS === 'web' && (
+                <Modal
+                  visible={showDownloadChoice}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => { setShowDownloadChoice(false); setShowQrCode(false); }}
+                >
+                  <View style={qrStyles.overlay}>
+                    <View style={qrStyles.box}>
+                      {!showQrCode ? (
+                        <>
+                          <Text style={qrStyles.title}>Scarica su:</Text>
+                          <TouchableOpacity
+                            style={qrStyles.choiceBtn}
+                            onPress={() => {
+                              Linking.openURL(APK_DOWNLOAD_URL);
+                              setShowDownloadChoice(false);
+                            }}
+                          >
+                            <Text style={qrStyles.choiceBtnText}>💻 PC / Windows</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={qrStyles.choiceBtn}
+                            onPress={() => setShowQrCode(true)}
+                          >
+                            <Text style={qrStyles.choiceBtnText}>📱 Android (QR code)</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={qrStyles.closeBtn}
+                            onPress={() => setShowDownloadChoice(false)}
+                          >
+                            <Text style={qrStyles.closeBtnText}>Annulla</Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <>
+                          <Text style={qrStyles.title}>Scansiona con il telefono Android</Text>
+                          <Image
+                            source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(APK_DOWNLOAD_URL)}` }}
+                            style={qrStyles.qrImage}
+                          />
+                          <Text style={qrStyles.hint}>Il QR è sempre valido, anche dopo gli aggiornamenti dell'app.</Text>
+                          <TouchableOpacity
+                            style={qrStyles.closeBtn}
+                            onPress={() => { setShowDownloadChoice(false); setShowQrCode(false); }}
+                          >
+                            <Text style={qrStyles.closeBtnText}>Chiudi</Text>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+                  </View>
+                </Modal>
               )}
               {blockedMessage ? <Text style={styles.blockedText}>{blockedMessage}</Text> : null}
               {isRegistering && <TextInput style={styles.input} placeholder={t('nomeCognome', lang)} placeholderTextColor={colors.placeholder} value={nome} onChangeText={setNome} />}
@@ -3776,7 +3836,8 @@ export default function App() {
         </View>
       )}
 
-      {/* ==========================================================
+   
+   {/* ==========================================================
           CONTENUTO PRINCIPALE (con watermark)
           ========================================================== */}
       <View style={{ flex: 1 }}>
@@ -8288,5 +8349,61 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+});
+
+const qrStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  box: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    width: 320,
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 16,
+    textAlign: 'center',
+    color: '#1a1a1a',
+  },
+  choiceBtn: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  choiceBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeBtn: {
+    marginTop: 8,
+    paddingVertical: 8,
+  },
+  closeBtnText: {
+    color: '#888',
+    fontSize: 14,
+  },
+  qrImage: {
+    width: 260,
+    height: 260,
+    marginBottom: 12,
+  },
+  hint: {
+    fontSize: 12,
+    color: '#888',
+    textAlign: 'center',
+    marginBottom: 8,
   },
 });
