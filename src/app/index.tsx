@@ -383,6 +383,8 @@ const t = (key, lang, ...args) => {
       fasceOrarie: 'Fasce Orarie (selezione multipla):',
       motivoUso: "Motivo dell'uso:",
       motivoObbligatorio: 'Motivo (obbligatorio)',
+      insegnanteRiferimento: 'Insegnante di riferimento (facoltativo):',
+      insegnanteRiferimentoPlaceholder: 'Nome insegnante (facoltativo)',
       nomeClasse: 'Nome della classe:',
       classeObbligatoriaCFP: 'Classe (obbligatorio per Scuola Professionale)',
       nomiPartecipanti: 'Nomi dei partecipanti:',
@@ -742,6 +744,8 @@ const t = (key, lang, ...args) => {
       fasceOrarie: 'الفترات الزمنية (تحديد متعدد):',
       motivoUso: 'سبب الاستخدام:',
       motivoObbligatorio: 'السبب (إلزامي)',
+      insegnanteRiferimento: 'المعلم المرجعي (اختياري):',
+      insegnanteRiferimentoPlaceholder: 'اسم المعلم (اختياري)',
       nomeClasse: 'اسم الصف:',
       classeObbligatoriaCFP: 'الصف (إلزامي لمدرسة المهن)',
       nomiPartecipanti: 'أسماء المشاركين:',
@@ -1297,6 +1301,7 @@ export default function App() {
   const [fasceSelezionate, setFasceSelezionate] = useState([]);
   const [motivo, setMotivo] = useState('');
   const [classe, setClasse] = useState('');
+  const [insegnanteRiferimento, setInsegnanteRiferimento] = useState('');
   const [studenteIPI, setStudenteIPI] = useState(null);
   const [partecipanti, setPartecipanti] = useState(['']);
 
@@ -2083,6 +2088,7 @@ export default function App() {
     setFasceSelezionate([]);
     setMotivo('');
     setClasse('');
+    setInsegnanteRiferimento('');
     setStudenteIPI(null);
     setPartecipanti(['']);
     setDataPrenotazione(new Date().toISOString().split('T')[0]);
@@ -2159,6 +2165,7 @@ export default function App() {
           motivo: motivo.trim(),
           studenteIPI: sezioneSelezionata === 'Scuola Professionale' ? studenteIPI : null,
           classe: sezioneSelezionata === 'Scuola Professionale' && studenteIPI === 'si' ? classe.trim() : '',
+          insegnanteRiferimento: insegnanteRiferimento.trim(),
           partecipanti: partecipanti.map(p => p.trim()).filter(p => p !== ''),
           utenteNome: userName,
           utenteEmail: user.email,
@@ -3123,6 +3130,7 @@ export default function App() {
             [t('colFasceOrarie', lang)]: (p.fasce || []).join(', '),
             [t('motivo', lang)]: p.motivo || '',
             [t('classe', lang)]: p.classe || '',
+            [t('insegnanteRiferimento', lang)]: p.insegnanteRiferimento || '',
             [t('partecipanti', lang)]: (p.partecipanti || []).join(', '),
             [t('colRichiestoDa', lang)]: p.utenteNome || '',
             [t('email', lang)]: p.utenteEmail || '',
@@ -4546,6 +4554,7 @@ export default function App() {
                             </Text>
                           ) : null}
                           {prenotazioneDettaglio.classe ? <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('classe', lang)}: {prenotazioneDettaglio.classe}</Text> : null}
+                          {prenotazioneDettaglio.insegnanteRiferimento ? <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('insegnanteRiferimento', lang)} {prenotazioneDettaglio.insegnanteRiferimento}</Text> : null}
                           {prenotazioneDettaglio.partecipanti && prenotazioneDettaglio.partecipanti.length > 0 && (
                             <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('partecipanti', lang)}: {prenotazioneDettaglio.partecipanti.join(', ')}</Text>
                           )}
@@ -6079,6 +6088,9 @@ export default function App() {
 
               <Text style={styles.label}>{t('motivoUso', lang)}</Text>
               <TextInput style={styles.input} placeholder={t('motivoObbligatorio', lang)} placeholderTextColor={colors.placeholder} value={motivo} onChangeText={setMotivo} />
+
+              <Text style={styles.label}>{t('insegnanteRiferimento', lang)}</Text>
+              <TextInput style={styles.input} placeholder={t('insegnanteRiferimentoPlaceholder', lang)} placeholderTextColor={colors.placeholder} value={insegnanteRiferimento} onChangeText={setInsegnanteRiferimento} />
 
               {sezioneSelezionata === 'Scuola Professionale' && (
                 <>
