@@ -139,8 +139,8 @@ export interface AulaStudioSharedProps {
   profiloAulaStudio: ProfiloAulaStudioStudente | null;
   /** Richiamata dal wizard dopo il salvataggio riuscito, per far ricaricare il profilo utente nel parent. */
   onProfiloAulaStudioSalvato: () => void;
-  /** Utenti che possono gestire l'Aula Studio (gestore/presideIpi/vicePresideIpi/segreteria), usato per notificare le nuove richieste di turno insegnanti. */
-  gestoriAulaStudio: { uid: string; nome: string }[];
+  /** Utenti che possono gestire l'Aula Studio (gestore/presideAbm/presideIpi/vicePresideIpi/segreteria), usato per notificare le nuove richieste di turno insegnanti; role serve per limitare l'avviso a chi gestisce quel tipo di aula. */
+  gestoriAulaStudio: { uid: string; nome: string; role?: string }[];
   /** Id della richiesta di turno da aprire automaticamente (deep-link da una notifica), o null/assente. */
   richiestaTurnoDaAprireId?: string | null;
   /** Richiamata dal componente dopo aver "consumato" richiestaTurnoDaAprireId, per pulire lo stato nel parent. */

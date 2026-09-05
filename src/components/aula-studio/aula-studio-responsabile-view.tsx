@@ -20,6 +20,7 @@ import { Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpac
 import AulaStudioCalendarioPopup from './aula-studio-calendario-popup';
 import {
   AZIONI_TERZO_PALLINO,
+  aulaStudioTipoScuolaConsentito,
   MINUTI_ANTICIPO_SBLOCCO_FASCIA,
   TIPI_REGISTRO_AULA_STUDIO,
 } from './aula-studio-constants';
@@ -112,7 +113,13 @@ export default function AulaStudioResponsabileView(props: AulaStudioSharedProps 
   const styles = useMemo(() => getStyles(colors, isRTL), [colors, isRTL]);
 
   const { configPerAula } = useAulaStudioConfig(db);
-  const { aule } = useAulaStudioAule(db);
+  const { aule: auleTutte } = useAulaStudioAule(db);
+  // Alcuni ruoli (Preside S. Base, Preside IPI, Vice Preside IPI) gestiscono solo
+  // l'Aula Studio del proprio tipo di scuola: qui filtriamo l'elenco aule di
+  // conseguenza, così selettore, aula di default e coda richieste turno mostrano
+  // solo ciò che quel ruolo può effettivamente gestire.
+  const tipoScuolaConsentito = aulaStudioTipoScuolaConsentito(userRole);
+  const aule = tipoScuolaConsentito ? auleTutte.filter((a) => a.tipoScuola === tipoScuolaConsentito) : auleTutte;
   const [aulaId, setAulaId] = useState<string>(restrizione?.aulaId || '');
   const configAula = configPerAula[aulaId] || AULA_STUDIO_CONFIG_DEFAULT;
   const [dataSelezionata, setDataSelezionata] = useState<string>(restrizione?.data || oggiIso());
@@ -421,8 +428,11 @@ export default function AulaStudioResponsabileView(props: AulaStudioSharedProps 
 
   // ---- Richieste turno insegnanti: coda di approvazione (segreteria/preside/vice preside/direttore) ----
   const richiesteInAttesa = useMemo(
-    () => turni.filter((r) => r.stato === 'in attesa').sort((a, b) => a.creatoTimestamp - b.creatoTimestamp),
-    [turni]
+    () =>
+      turni
+        .filter((r) => r.stato === 'in attesa' && aule.some((a) => a.id === r.aulaId))
+        .sort((a, b) => a.creatoTimestamp - b.creatoTimestamp),
+    [turni, aule]
   );
 
   const decidiTurno = async (r: RichiestaTurno, esito: 'confermata' | 'rifiutata') => {

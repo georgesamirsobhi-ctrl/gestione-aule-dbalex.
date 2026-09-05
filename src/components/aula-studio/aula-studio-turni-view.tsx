@@ -11,7 +11,7 @@ import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'rea
 
 import AulaStudioCalendarioPopup from './aula-studio-calendario-popup';
 import AulaStudioResponsabileView from './aula-studio-responsabile-view';
-import { TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
+import { aulaStudioTipoScuolaConsentito, TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
 import { richiediTurno, scaduraTurno, useAulaStudioAule, useAulaStudioConfig, useAulaStudioTurni } from './aula-studio-data';
 import {
   AULA_STUDIO_CONFIG_DEFAULT,
@@ -147,8 +147,12 @@ export default function AulaStudioTurniView(props: AulaStudioSharedProps) {
         TIPI_REGISTRO_AULA_STUDIO.RICHIESTA_TURNO,
         `${userName} — ${aula.nome} ${dataSelezionata} ${fasceScelte.join(', ')}`
       );
+      const gestoriDaAvvisare = (gestoriAulaStudio || []).filter((g) => {
+        const tipoConsentito = aulaStudioTipoScuolaConsentito(g.role || '');
+        return !tipoConsentito || tipoConsentito === aula.tipoScuola;
+      });
       await Promise.all(
-        (gestoriAulaStudio || []).map((g) =>
+        gestoriDaAvvisare.map((g) =>
           inviaNotificaConPreferenza(
             g.uid,
             'richiesta_turno_aula_studio',

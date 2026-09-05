@@ -39,17 +39,33 @@ export const SEZIONE_AULA_STUDIO = 'Aula Studio';
 
 /**
  * Ruoli che di default possono gestire l'Aula Studio (appello, pallini, sanzioni,
- * impostazioni): Gestore, Preside IPI, Vice Preside IPI, Segreteria e i ruoli
- * "tipo segreteria". Resta comunque sovrascrivibile dalla tabella permessi esistente
- * (Impostazioni Avanzate), come tutti gli altri permessi dell'app.
+ * impostazioni): Gestore, Preside S. Base, Preside IPI, Vice Preside IPI,
+ * Segreteria IPI, Segreteria S. Base. Resta comunque sovrascrivibile dalla
+ * tabella permessi esistente (Impostazioni Avanzate), come tutti gli altri
+ * permessi dell'app. Lo scope (quale aula può gestire ciascun ruolo) è deciso
+ * separatamente da aulaStudioTipoScuolaConsentito.
  */
 export function puoGestireAulaStudio(ruolo: string): boolean {
   return (
     ruolo === 'gestore' ||
+    ruolo === 'presideAbm' ||
     ruolo === 'presideIpi' ||
     ruolo === 'vicePresideIpi' ||
-    ruolo === 'segreteria'
+    ruolo === 'segreteria' ||
+    ruolo === 'segreteriaSBase'
   );
+}
+
+/**
+ * Tipo di scuola (Aula Studio) a cui un ruolo è limitato: 'medie' per Preside
+ * S. Base e Segreteria S. Base, 'ipi' per Preside IPI, Vice Preside IPI e
+ * Segreteria IPI. Restituisce null per i ruoli senza restrizione (Gestore):
+ * vede e gestisce tutte le aule.
+ */
+export function aulaStudioTipoScuolaConsentito(ruolo: string): 'medie' | 'ipi' | null {
+  if (ruolo === 'presideAbm' || ruolo === 'segreteriaSBase') return 'medie';
+  if (ruolo === 'presideIpi' || ruolo === 'vicePresideIpi' || ruolo === 'segreteria') return 'ipi';
+  return null;
 }
 
 /** Le 3 azioni disponibili al responsabile quando uno studente raggiunge 3 pallini nel semestre. */

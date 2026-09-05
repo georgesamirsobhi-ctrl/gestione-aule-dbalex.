@@ -161,9 +161,9 @@ const calcolaEta = (dataNascita) => {
   return eta;
 };
 
-const RUOLI_TIPO_SEGRETERIA = ['segreteria', 'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'];
+const RUOLI_TIPO_SEGRETERIA = ['segreteria', 'segreteriaSBase', 'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'];
 // 'studente' e 'insegnante' sono ora ruoli veri e propri, selezionabili come tutti gli altri.
-const RUOLI_TUTTI = ['utente', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore'];
+const RUOLI_TUTTI = ['utente', 'TEVT', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore'];
 
 // Funzioni di permesso esistenti
 const puoGestireUtenti = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
@@ -185,14 +185,15 @@ const puoVedereProfili = (ruolo) =>
   ruolo === 'presideAbm' ||
   ruolo === 'oratorio';
 
-const puoModificareProfili = (ruolo) => 
-  ruolo === 'gestore' || 
+const puoModificareProfili = (ruolo) =>
+  ruolo === 'gestore' ||
   ruolo === 'segreteria' ||
+  ruolo === 'segreteriaSBase' ||
   ruolo === 'presideIpi' ||
   ruolo === 'vicePresideIpi';
 
-const puoGestireClassi = (ruolo) => 
-  ruolo === 'gestore' || ruolo === 'segreteria';
+const puoGestireClassi = (ruolo) =>
+  ruolo === 'gestore' || ruolo === 'segreteria' || ruolo === 'segreteriaSBase';
 
 const puoCreareRuoliPersonalizzati = (ruolo) => 
   ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
@@ -260,11 +261,13 @@ const etichettaRuolo = (ruolo, currentLang) => {
   if (ruolo === 'gestore') return currentLang === 'ar' ? 'المدير' : 'DIRETTORE';
   if (ruolo === 'manutentore') return currentLang === 'ar' ? 'الصيانة / تقنية المعلومات' : 'MANUTENTORE / IT';
   if (ruolo === 'economo') return currentLang === 'ar' ? 'أمين الصندوق' : 'ECONOMO';
-  if (ruolo === 'segreteria') return currentLang === 'ar' ? 'السكرتارية' : 'SEGRETERIA';
-  if (ruolo === 'presideIpi') return currentLang === 'ar' ? 'مدير المعهد (IPI)' : 'PRESIDE (IPI)';
-  if (ruolo === 'vicePresideIpi') return currentLang === 'ar' ? 'نائب مدير المعهد (IPI)' : 'VICE PRESIDE (IPI)';
-  if (ruolo === 'presideAbm') return currentLang === 'ar' ? 'مدير (A, B, M)' : 'PRESIDE (A, B, M)';
+  if (ruolo === 'segreteria') return currentLang === 'ar' ? 'السكرتارية IPI' : 'SEGRETERIA IPI';
+  if (ruolo === 'segreteriaSBase') return currentLang === 'ar' ? 'سكرتارية المدرسة الأساسية' : 'SEGRETERIA S. BASE';
+  if (ruolo === 'presideIpi') return currentLang === 'ar' ? 'مدير المعهد IPI' : 'PRESIDE IPI';
+  if (ruolo === 'vicePresideIpi') return currentLang === 'ar' ? 'نائب مدير المعهد IPI' : 'VICE PRESIDE IPI';
+  if (ruolo === 'presideAbm') return currentLang === 'ar' ? 'مدير المدرسة الأساسية' : 'PRESIDE S. BASE';
   if (ruolo === 'oratorio') return currentLang === 'ar' ? 'الأوراتوريو' : 'ORATORIO';
+  if (ruolo === 'TEVT') return currentLang === 'ar' ? 'TEVT' : 'TEVT';
   return currentLang === 'ar' ? 'مستخدم' : 'UTENTE';
 };
 
@@ -339,6 +342,8 @@ const t = (key, lang, ...args) => {
       nomeNuovaSezione: 'Nome nuova sezione',
       nomeNuovaSezioneAr: 'Nome sezione in arabo (opzionale)',
       nomeSezioneAr: 'Nome sezione in arabo (opzionale)',
+      modificaSezioneTitolo: 'Modifica Sezione',
+      nomeSezioneLabel: 'Nome Sezione:',
       elimina: '✕',
       modifica: 'Modifica',
       fine: 'Fine',
@@ -803,6 +808,8 @@ const t = (key, lang, ...args) => {
       nomeNuovaSezione: 'اسم القسم الجديد',
       nomeNuovaSezioneAr: 'اسم القسم بالعربية (اختياري)',
       nomeSezioneAr: 'اسم القسم بالعربية (اختياري)',
+      modificaSezioneTitolo: 'تعديل القسم',
+      nomeSezioneLabel: 'اسم القسم:',
       elimina: '✕',
       modifica: 'تعديل',
       fine: 'تم',
@@ -3757,7 +3764,7 @@ export default function App() {
     () =>
       utentiLista
         .filter((u) => haPermesso(u, 'puoGestireAulaStudio', puoGestireAulaStudio))
-        .map((u) => ({ uid: u.id, nome: u.nome })),
+        .map((u) => ({ uid: u.id, nome: u.nome, role: u.role })),
     [utentiLista]
   );
 
@@ -6903,11 +6910,11 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContentFixed}>
             <View style={styles.modalHeaderFixed}>
-              <Text style={styles.modalTitle}>{t('modifica', lang)} Sezione</Text>
+              <Text style={styles.modalTitle}>{t('modificaSezioneTitolo', lang)}</Text>
               <TouchableOpacity onPress={() => setModalModificaSezione(false)}><Text style={styles.closeText}>✕</Text></TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBodyScrollable} keyboardShouldPersistTaps="handled">
-              <Text style={styles.label}>Nome Sezione:</Text>
+              <Text style={styles.label}>{t('nomeSezioneLabel', lang)}</Text>
               <TextInput style={styles.input} placeholder="es. Scuola Professionale" placeholderTextColor={colors.placeholder} value={nomeSezioneInModifica} onChangeText={setNomeSezioneInModifica} />
               <Text style={styles.label}>{t('nomeSezioneAr', lang)}</Text>
               <TextInput style={[styles.input, { textAlign: 'right' }]} placeholder={t('nomeNuovaSezioneAr', lang)} placeholderTextColor={colors.placeholder} value={nomeSezioneInModificaAr} onChangeText={setNomeSezioneInModificaAr} />
