@@ -1,4 +1,4 @@
 {
-  "framework": null,
-  "outputDirectory": "public_vercel"
+  "buildCommand": "npx expo export -p web",
+  "outputDirectory": "dist"
 }
