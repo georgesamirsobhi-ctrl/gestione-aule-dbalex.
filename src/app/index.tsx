@@ -4035,6 +4035,7 @@ export default function App() {
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
           >
             <ScrollView
+              style={{ flex: 1 }}
               contentContainerStyle={styles.authCenter}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
@@ -4205,6 +4206,14 @@ export default function App() {
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 80}
           >
           <ScrollView
+            // MODIFICATO: senza uno "style" con flex/flexShrink esplicito, una
+            // ScrollView non si restringe al proprio genitore (di default in
+            // RN mantiene la dimensione del contenuto) — con molti campi
+            // insieme (Studente + Aula Studio + Data di nascita) il contenuto
+            // superava l'altezza dello schermo su telefoni Android più piccoli
+            // e lo scroll non funzionava: il pulsante "Conferma" restava
+            // irraggiungibile, tagliato fuori dal bordo dello schermo.
+            style={{ flex: 1 }}
             contentContainerStyle={[
               styles.authCenter,
               {
@@ -4418,9 +4427,15 @@ export default function App() {
         </View>
         <View style={[styles.headerSideGroup, { justifyContent: isRTL ? 'flex-start' : 'flex-end' }]}>
           <View style={[styles.headerIconsRow, isRTL ? styles.headerIconsRowRTL : styles.headerIconsRowLTR]}>
-            <TouchableOpacity style={styles.langBtnHeader} onPress={() => setLang(lang === 'it' ? 'ar' : 'it')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Text style={styles.langTextHeader}>{lang === 'it' ? 'ع' : 'It'}</Text>
-            </TouchableOpacity>
+            {/* MODIFICATO: tolto dalla barra principale SOLO sull'app
+                (Android/iOS) — la lingua resta cambiabile da Impostazioni →
+                Preferenze, dove già esisteva la stessa scelta duplicata.
+                Sul sito web resta qui, invariato. */}
+            {Platform.OS === 'web' && (
+              <TouchableOpacity style={styles.langBtnHeader} onPress={() => setLang(lang === 'it' ? 'ar' : 'it')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.langTextHeader}>{lang === 'it' ? 'ع' : 'It'}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.langBtnHeader} onPress={() => setModalNotifiche(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Text style={styles.langTextHeader}>🔔</Text>
               {notificheNonLette > 0 && (
@@ -5796,8 +5811,14 @@ export default function App() {
                         </View>
                         {utentiFiltrati.map((u, idx) => (
                           <TouchableOpacity key={u.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]} onPress={() => setUtenteDettaglioTarget(u)}>
-                            <Text style={[styles.tableCell, styles.utentiColNome]} numberOfLines={1}>{u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}</Text>
-                            <Text style={[styles.tableCell, styles.utentiColEmail]} numberOfLines={1}>{u.email}</Text>
+                            {/* MODIFICATO: su Android questa tabella non ha scroll orizzontale
+                                (vedi ScrollView sotto) e la colonna Email è stretta — con
+                                "numberOfLines={1}" gli indirizzi email più lunghi venivano
+                                tagliati con "...". Su Android ora il testo va a capo invece
+                                di essere troncato; su web/iOS resta su una riga perché lì la
+                                tabella scorre orizzontalmente e c'è già lo spazio necessario. */}
+                            <Text style={[styles.tableCell, styles.utentiColNome]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>{u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}</Text>
+                            <Text style={[styles.tableCell, styles.utentiColEmail]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>{u.email}</Text>
                             {Platform.OS !== 'android' && (
                               <View style={styles.utentiColStato}>
                                 <View style={[styles.statoBadge, { backgroundColor: u.primoAccessoEffettuato === false ? colors.warning : colors.success }]}>
@@ -7779,7 +7800,7 @@ export default function App() {
                               style={[styles.permTableRow, isAlt && styles.tableRowAlt]}
                               onPress={() => togglePermesso(riga.permessoKey)}
                             >
-                              <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingRight: 8 }}>
+                              <View style={{ flexShrink: 1, flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingLeft: isRTL ? 8 : 0, paddingRight: isRTL ? 0 : 8 }}>
                                 <Text style={styles.permTableCellLabel}>{lang === 'ar' ? riga.labelAr : riga.label}</Text>
                                 {isOverride && (
                                   <View style={styles.permessoBadgeOverride}>
@@ -8379,7 +8400,11 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
 
   // ---- Badge stato ----
   statoBadge: {
-    alignSelf: 'flex-start',
+    // MODIFICATO: era fisso a 'flex-start' (sempre a sinistra), ma il testo
+    // della cella accanto (es. "Aula") si allinea a destra in arabo tramite
+    // textAlign — il badge restava comunque incollato a sinistra, dando
+    // un effetto di colonne non allineate tra loro nella versione araba.
+    alignSelf: isRTL ? 'flex-end' : 'flex-start',
     borderRadius: 6,
     paddingVertical: 3,
     paddingHorizontal: 7,
@@ -8441,7 +8466,10 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
     marginBottom: 8,
   },
   permTableHeaderRow: {
-    flexDirection: 'row',
+    // MODIFICATO: era sempre 'row' — in arabo le celle sotto (etichetta a
+    // destra, interruttore a sinistra) si leggevano al contrario rispetto
+    // all'intestazione, che restava nell'ordine italiano.
+    flexDirection: isRTL ? 'row-reverse' : 'row',
     backgroundColor: colors.surfaceAlt,
     borderBottomWidth: 2,
     borderColor: colors.primary,
@@ -8475,7 +8503,11 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
     textAlign: isRTL ? 'right' : 'left',
   },
   permTableRow: {
-    flexDirection: 'row',
+    // MODIFICATO: come sopra, la riga va invertita in arabo perché al suo
+    // interno il testo è già allineato a destra (vedi permTableCellLabel) —
+    // senza invertire anche l'ordine, l'etichetta restava a sinistra mentre
+    // il testo dentro era scritto verso destra: risultato disallineato.
+    flexDirection: isRTL ? 'row-reverse' : 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 10,
@@ -8486,6 +8518,7 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
   permTableCellLabel: {
     color: colors.textMain,
     fontSize: Platform.OS === 'web' ? 14 : 13,
+    textAlign: isRTL ? 'right' : 'left',
   },
   permTableCellToggle: {
     alignItems: 'center',
