@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Notifications from 'expo-notifications';
 import * as Sharing from 'expo-sharing';
@@ -28,6 +28,7 @@ import {
   Linking,
   Modal,
   Platform,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -41,6 +42,27 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as XLSX from 'xlsx';
 import { auth, db, firebaseConfig } from '../config/firebaseConfig';
+import AulaStudioEsportaPanel from '@/components/aula-studio/aula-studio-esporta-panel';
+import AulaStudioImpostazioni from '@/components/aula-studio/aula-studio-impostazioni';
+import AulaStudioResponsabileView from '@/components/aula-studio/aula-studio-responsabile-view';
+import AulaStudioStudentView from '@/components/aula-studio/aula-studio-student-view';
+import AulaStudioTurniView from '@/components/aula-studio/aula-studio-turni-view';
+import { puoGestireAulaStudio } from '@/components/aula-studio/aula-studio-constants';
+import { salvaProfiloAulaStudio } from '@/components/aula-studio/aula-studio-data';
+import { numArabo, dataArabo } from '@/utils/numeri-arabo';
+
+/** Divide "Nome Cognome" nel modo più ragionevole: ultima parola = cognome, il resto = nome. */
+function separaNomeCognomeAulaStudio(nomeCompleto) {
+  const parti = (nomeCompleto || '').trim().split(/\s+/).filter(Boolean);
+  if (parti.length <= 1) return { nome: parti[0] || '', cognome: '' };
+  return { nome: parti.slice(0, -1).join(' '), cognome: parti[parti.length - 1] };
+}
+
+// MODIFICATO: endpoint della funzione serverless (Vercel) che cancella
+// DEFINITIVAMENTE un utente (Firebase Authentication + Firestore).
+// Dopo il deploy su Vercel, se il dominio del progetto è diverso da quello
+// di default, aggiorna qui l'URL.
+const DELETE_USER_API_URL = 'https://gestione-aule-dbalex.vercel.app/api/delete-user';
 
 // ---- SFONDI E LOGHI ----
 const SFONDO_LOGIN = require('../../assets/sfondo-login.jpg');
@@ -64,7 +86,9 @@ const CATEGORIE_NOTIFICHE = {
   ESITO_PRENOTAZIONE: 'esito_prenotazione',
   NUOVA_SEGNALAZIONE: 'nuova_segnalazione',
   INIZIO_LAVORO: 'inizio_lavoro',
-  FINE_LAVORO: 'fine_lavoro'
+  FINE_LAVORO: 'fine_lavoro',
+  RICHIESTA_TURNO_AULA_STUDIO: 'richiesta_turno_aula_studio',
+  ESITO_TURNO_AULA_STUDIO: 'esito_turno_aula_studio'
 };
 
 const ETICHETTE_CATEGORIE = {
@@ -73,14 +97,18 @@ const ETICHETTE_CATEGORIE = {
     [CATEGORIE_NOTIFICHE.ESITO_PRENOTAZIONE]: 'Esito prenotazione (approvata/rifiutata)',
     [CATEGORIE_NOTIFICHE.NUOVA_SEGNALAZIONE]: 'Nuova segnalazione guasto',
     [CATEGORIE_NOTIFICHE.INIZIO_LAVORO]: 'Inizio lavoro (presa in carico)',
-    [CATEGORIE_NOTIFICHE.FINE_LAVORO]: 'Fine lavoro (segnalazione risolta)'
+    [CATEGORIE_NOTIFICHE.FINE_LAVORO]: 'Fine lavoro (segnalazione risolta)',
+    [CATEGORIE_NOTIFICHE.RICHIESTA_TURNO_AULA_STUDIO]: 'Nuova richiesta di turno Aula Studio',
+    [CATEGORIE_NOTIFICHE.ESITO_TURNO_AULA_STUDIO]: 'Esito richiesta di turno Aula Studio'
   },
   ar: {
     [CATEGORIE_NOTIFICHE.NUOVA_PRENOTAZIONE]: 'طلب حجز جديد',
     [CATEGORIE_NOTIFICHE.ESITO_PRENOTAZIONE]: 'نتيجة الحجز (موافقة/رفض)',
     [CATEGORIE_NOTIFICHE.NUOVA_SEGNALAZIONE]: 'بلاغ عطل جديد',
     [CATEGORIE_NOTIFICHE.INIZIO_LAVORO]: 'بدء العمل (استلام البلاغ)',
-    [CATEGORIE_NOTIFICHE.FINE_LAVORO]: 'انتهاء العمل (تم حل البلاغ)'
+    [CATEGORIE_NOTIFICHE.FINE_LAVORO]: 'انتهاء العمل (تم حل البلاغ)',
+    [CATEGORIE_NOTIFICHE.RICHIESTA_TURNO_AULA_STUDIO]: 'طلب مناوبة جديد في قاعة الدراسة',
+    [CATEGORIE_NOTIFICHE.ESITO_TURNO_AULA_STUDIO]: 'نتيجة طلب المناوبة في قاعة الدراسة'
   }
 };
 
@@ -106,7 +134,7 @@ const CLASSI_DISPONIBILI = [
 /** Genera automaticamente gli anni scolastici da quest'anno a +5 anni */
 const generaAnniScolastici = () => {
   const annoCorrente = new Date().getFullYear();
-  const anni = [];
+  const anni: string[] = [];
   for (let i = 0; i <= 5; i++) {
     const anno = annoCorrente + i;
     anni.push(`${anno}-${anno + 1}`);
@@ -175,21 +203,22 @@ const puoAssegnarePermessiRuoliPersonalizzati = (ruolo) =>
 // Configurazione righe della tabella permessi (Impostazioni Avanzate).
 // Ogni riga rappresenta un singolo permesso, raggruppato per categoria.
 const RIGHE_TABELLA_PERMESSI = [
-  { categoriaKey: 'sezStruttura', permessoKey: 'puoGestireAule', label: 'Gestire sezioni e aule', defaultFn: puoGestireAule },
-  { categoriaKey: 'sezPrenotazioni', permessoKey: 'puoApprovarePrenotazioni', label: 'Approvare/rifiutare prenotazioni', defaultFn: puoApprovarePrenotazioni },
-  { categoriaKey: 'sezManutenzione', permessoKey: 'puoGestireManutenzione', label: 'Gestire segnalazioni (stati, diario)', defaultFn: puoGestireManutenzione },
-  { categoriaKey: 'sezUtentiDomini', permessoKey: 'puoGestireUtenti', label: 'Gestire utenti (aggiungere, modificare ruoli, eliminare)', defaultFn: puoGestireUtenti },
-  { categoriaKey: 'sezUtentiDomini', permessoKey: 'puoGestireDominiEmail', label: 'Gestire domini email consentiti', defaultFn: puoGestireDominiEmail },
-  { categoriaKey: 'sezBlocchi', permessoKey: 'puoGestireBlocchi', label: 'Bloccare/sbloccare utenti', defaultFn: puoGestireUtenti },
-  { categoriaKey: 'sezReset', permessoKey: 'puoResettareDati', label: 'Eseguire reset dei dati (prenotazioni, manutenzione)', defaultFn: puoResettareDati },
-  { categoriaKey: 'sezEsportazione', permessoKey: 'puoEsportareUtentiPrenotazioni', label: 'Esportare utenti e prenotazioni', defaultFn: puoEsportareUtentiPrenotazioni },
-  { categoriaKey: 'sezEsportazione', permessoKey: 'puoEsportarePrenotazioniSegnalazioni', label: 'Esportare prenotazioni e segnalazioni di manutenzione', defaultFn: puoEsportarePrenotazioniSegnalazioni },
-  { categoriaKey: 'registroAttivita', permessoKey: 'puoVedereRegistroAttivita', label: 'Vedere ed esportare il registro attività', defaultFn: puoVedereRegistroAttivita },
-  { categoriaKey: 'profili', permessoKey: 'puoVedereProfili', label: 'Visualizzare la sezione Profili', defaultFn: puoVedereProfili },
-  { categoriaKey: 'profili', permessoKey: 'puoModificareProfili', label: 'Modificare i profili altrui', defaultFn: puoModificareProfili },
-  { categoriaKey: 'classi', permessoKey: 'puoGestireClassi', label: 'Gestire le classi (in Impostazioni)', defaultFn: puoGestireClassi },
-  { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoCreareRuoliPersonalizzati', label: 'Creare ruoli personalizzati (in Aggiungi Utente)', defaultFn: puoCreareRuoliPersonalizzati },
-  { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoAssegnarePermessiRuoliPersonalizzati', label: 'Assegnare permessi a ruoli personalizzati', defaultFn: puoAssegnarePermessiRuoliPersonalizzati }
+  { categoriaKey: 'sezStruttura', permessoKey: 'puoGestireAule', label: 'Gestire sezioni e aule', labelAr: 'إدارة الأقسام والقاعات', defaultFn: puoGestireAule },
+  { categoriaKey: 'sezPrenotazioni', permessoKey: 'puoApprovarePrenotazioni', label: 'Approvare/rifiutare prenotazioni', labelAr: 'الموافقة على الحجوزات أو رفضها', defaultFn: puoApprovarePrenotazioni },
+  { categoriaKey: 'sezManutenzione', permessoKey: 'puoGestireManutenzione', label: 'Gestire segnalazioni (stati, diario)', labelAr: 'إدارة البلاغات (الحالات، السجل اليومي)', defaultFn: puoGestireManutenzione },
+  { categoriaKey: 'sezUtentiDomini', permessoKey: 'puoGestireUtenti', label: 'Gestire utenti (aggiungere, modificare ruoli, eliminare)', labelAr: 'إدارة المستخدمين (إضافة، تعديل الأدوار، حذف)', defaultFn: puoGestireUtenti },
+  { categoriaKey: 'sezUtentiDomini', permessoKey: 'puoGestireDominiEmail', label: 'Gestire domini email consentiti', labelAr: 'إدارة نطاقات البريد الإلكتروني المسموح بها', defaultFn: puoGestireDominiEmail },
+  { categoriaKey: 'sezBlocchi', permessoKey: 'puoGestireBlocchi', label: 'Bloccare/sbloccare utenti', labelAr: 'حظر/إلغاء حظر المستخدمين', defaultFn: puoGestireUtenti },
+  { categoriaKey: 'sezReset', permessoKey: 'puoResettareDati', label: 'Eseguire reset dei dati (prenotazioni, manutenzione)', labelAr: 'إعادة تعيين البيانات (الحجوزات، الصيانة)', defaultFn: puoResettareDati },
+  { categoriaKey: 'sezEsportazione', permessoKey: 'puoEsportareUtentiPrenotazioni', label: 'Esportare utenti e prenotazioni', labelAr: 'تصدير المستخدمين والحجوزات', defaultFn: puoEsportareUtentiPrenotazioni },
+  { categoriaKey: 'sezEsportazione', permessoKey: 'puoEsportarePrenotazioniSegnalazioni', label: 'Esportare prenotazioni e segnalazioni di manutenzione', labelAr: 'تصدير الحجوزات وبلاغات الصيانة', defaultFn: puoEsportarePrenotazioniSegnalazioni },
+  { categoriaKey: 'registroAttivita', permessoKey: 'puoVedereRegistroAttivita', label: 'Vedere ed esportare il registro attività', labelAr: 'عرض وتصدير سجل النشاط', defaultFn: puoVedereRegistroAttivita },
+  { categoriaKey: 'profili', permessoKey: 'puoVedereProfili', label: 'Visualizzare la sezione Profili', labelAr: 'عرض قسم الملفات الشخصية', defaultFn: puoVedereProfili },
+  { categoriaKey: 'profili', permessoKey: 'puoModificareProfili', label: 'Modificare i profili altrui', labelAr: 'تعديل ملفات المستخدمين الآخرين', defaultFn: puoModificareProfili },
+  { categoriaKey: 'classi', permessoKey: 'puoGestireClassi', label: 'Gestire le classi (in Impostazioni)', labelAr: 'إدارة الفصول (في الإعدادات)', defaultFn: puoGestireClassi },
+  { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoCreareRuoliPersonalizzati', label: 'Creare ruoli personalizzati (in Aggiungi Utente)', labelAr: 'إنشاء أدوار مخصّصة (في إضافة مستخدم)', defaultFn: puoCreareRuoliPersonalizzati },
+  { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoAssegnarePermessiRuoliPersonalizzati', label: 'Assegnare permessi a ruoli personalizzati', labelAr: 'تعيين صلاحيات للأدوار المخصّصة', defaultFn: puoAssegnarePermessiRuoliPersonalizzati },
+  { categoriaKey: 'sezAulaStudio', permessoKey: 'puoGestireAulaStudio', label: 'Gestire Aula Studio (appello, pallini, sanzioni, impostazioni)', labelAr: 'إدارة قاعة الدراسة (الحضور، النقاط، العقوبات، الإعدادات)', defaultFn: puoGestireAulaStudio }
 ];
 
 const NOMI_MESI = {
@@ -209,10 +238,10 @@ const formattaMeseAnno = (ym, currentLang) => {
   if (!ym) return '';
   const [anno, mese] = ym.split('-');
   const mesi = NOMI_MESI[currentLang] || NOMI_MESI['it'];
-  return `${mesi[mese] || mese} ${anno}`;
+  return `${mesi[mese] || mese} ${numArabo(anno, currentLang)}`;
 };
 
-const formattaDataOra = (iso) => {
+const formattaDataOra = (iso, currentLang) => {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
@@ -221,7 +250,8 @@ const formattaDataOra = (iso) => {
   const aaaa = d.getFullYear();
   const hh = String(d.getHours()).padStart(2, '0');
   const min = String(d.getMinutes()).padStart(2, '0');
-  return `${gg}/${mm}/${aaaa} ${hh}:${min}`;
+  const testo = `${gg}/${mm}/${aaaa} ${hh}:${min}`;
+  return numArabo(testo, currentLang);
 };
 
 const etichettaRuolo = (ruolo, currentLang) => {
@@ -269,7 +299,7 @@ const nomeGiornoSettimana = (dataStr, currentLang) => {
 };
 
 const generaDateRipetizione = (dataInizioObj, dataFineStr) => {
-  const risultato = [];
+  const risultato: string[] = [];
   if (!dataFineStr) return risultato;
   let corrente = new Date(dataInizioObj);
   const fine = new Date(dataFineStr + 'T00:00:00');
@@ -352,9 +382,9 @@ const t = (key, lang, ...args) => {
       erroreCreazioneAccount: 'Errore nella creazione dell\'account',
       notaUtenteManualeBypass: "Il Gestore può creare account con qualsiasi email, anche fuori dai domini consentiti. All'utente arriverà un'email con un link per impostare la password; non è richiesta un'ulteriore verifica email.",
       eliminaUtenteAzione: 'Elimina',
-      confermaEliminaUtenteMessaggio: (nome) => `Vuoi rimuovere ${nome} dalla lista? Verrà tolto solo dall'app: il suo account di accesso Firebase resterà attivo finché non lo elimini manualmente da Firebase Console > Authentication.`,
-      utenteRimossoDallaLista: "Utente rimosso dalla lista. Ricorda: l'account di accesso resta attivo su Firebase Auth finché non lo elimini manualmente dalla Console.",
-      notaEliminaUtenteLista: "Eliminando un utente da qui lo rimuovi solo da questa lista (Firestore): il suo account di accesso su Firebase Authentication resta comunque attivo. Per eliminarlo del tutto, vai su Firebase Console > Authentication e rimuovilo manualmente da lì.",
+      confermaEliminaUtenteMessaggio: (nome) => `Vuoi eliminare definitivamente ${nome}? Verrà rimosso sia dall'app sia dall'accesso Firebase: l'operazione non è reversibile.`,
+      utenteRimossoDallaLista: "Utente eliminato definitivamente, sia dall'app che dall'accesso Firebase.",
+      notaEliminaUtenteLista: "Eliminando un utente da qui lo elimini definitivamente: sia dalla lista (Firestore) sia dal suo accesso Firebase Authentication.",
       toccaRigaUtente: 'Tocca un utente per cambiare ruolo o eliminarlo',
       colonnaStatoEmail: 'Stato',
       scaricaAppAndroidTitolo: 'Preferisci l\'app? Scaricala per Android',
@@ -371,7 +401,6 @@ const t = (key, lang, ...args) => {
       nessunDominio: 'Nessun dominio impostato: la registrazione è aperta a qualsiasi email.',
       classi: 'Classi',
       gestioneClassi: 'Gestione Classi',
-      nomeClasse: 'Nome classe',
       aggiungiClasse: '+ Aggiungi Classe',
       salvaClasse: 'Salva',
       annullaModifica: 'Annulla',
@@ -583,6 +612,7 @@ const t = (key, lang, ...args) => {
       sezioneNotifiche: 'Notifiche',
       gruppoNotifichePrenotazione: 'Prenotazione',
       gruppoNotificheManutenzione: 'Manutenzione',
+      gruppoNotificheAulaStudio: 'Aula Studio',
       sezioneGestioneUtenti: 'Gestione Utenti',
       notificaNuovaRichiestaTitolo: (aula) => `Nuova richiesta prenotazione: ${aula}`,
       notificaNuovaRichiestaCorpo: (utente, aula, data) => `${utente} ha richiesto "${aula}" per il ${data}.`,
@@ -644,7 +674,110 @@ const t = (key, lang, ...args) => {
       sezBlocchi: 'Blocchi',
       sezReset: 'Reset',
       sezEsportazione: 'Esportazione',
-      sezRuoliPersonalizzati: 'Ruoli Personalizzati'
+      sezRuoliPersonalizzati: 'Ruoli Personalizzati',
+      sezAulaStudio: 'Aula Studio',
+
+      // ---- AULA STUDIO ----
+      navAulaStudio: 'Aula Studio',
+      successo: 'Successo',
+      cognome: 'Cognome',
+      oggi: 'Oggi',
+      salva: 'Salva',
+      resetLabel: 'Reset',
+      tipoLabel: 'Tipo',
+      dettaglioLabel: 'Dettaglio',
+      permessoLabel: 'Permesso',
+      attivoLabel: 'Attivo',
+      chiudiLabel: 'Chiudi',
+      aulaStudioTitoloSezione: 'Aula Studio',
+      aulaStudioSchedaPrenota: 'Prenota',
+      aulaStudioSchedaMiePrenotazioni: 'Le mie prenotazioni',
+      aulaStudioScegliAula: "Scegli l'aula",
+      aulaStudioScegliGiorno: 'Scegli il giorno',
+      aulaStudioNessunGiornoDisponibile: 'Nessun giorno disponibile per la prenotazione al momento.',
+      aulaStudioClasse: 'Classe',
+      aulaStudioNumeroInClasse: 'Numero in classe',
+      aulaStudioFasceOrarie: 'Fasce orarie',
+      aulaStudioListaAttesa: (n) => `Lista d'attesa (${n})`,
+      aulaStudioPostiLiberi: (n) => `${n} post${n === 1 ? 'o libero' : 'i liberi'}`,
+      aulaStudioFasciaGiaIniziata: 'Fascia già iniziata',
+      aulaStudioPrenota: 'Prenota',
+      aulaStudioNessunaPrenotazione: 'Nessuna prenotazione.',
+      aulaStudioStatoConfermata: 'Confermata',
+      aulaStudioStatoInAttesa: "In lista d'attesa",
+      aulaStudioCompilaDatiStudente: 'Compila nome, cognome, classe e numero.',
+      aulaStudioSelezionaAlmenoUnaFascia: 'Seleziona almeno una fascia oraria.',
+      aulaStudioBloccoAttivoMessaggio: (data) => `Prenotazione non consentita: blocco attivo fino al ${data}.`,
+      aulaStudioConflittoAltraAula: (fascia) => `Hai già una prenotazione per la fascia ${fascia} in un'altra aula.`,
+      aulaStudioPrenotazioneConfermata: 'Prenotazione confermata.',
+      aulaStudioPrenotazioneInAttesa: "Sei stato/a inserito/a in lista d'attesa: riceverai un avviso se si libera un posto.",
+      aulaStudioPrenotazioneParzialeAttesa: 'Alcune fasce sono state confermate, altre inserite in lista di attesa.',
+      aulaStudioErroreGenerico: 'Si è verificato un errore. Riprova.',
+      aulaStudioPalliniMessaggio: (n) => `Attenzione: ${n} pallin${n === 1 ? 'o rosso' : 'i rossi'} in questo semestre.`,
+      aulaStudioNotificaPromossoTitolo: 'Prenotazione confermata',
+      aulaStudioNotificaPromossoCorpo: (aula, data, fascia) => `La tua prenotazione per ${aula} il ${data} (${fascia}) è stata confermata: si è liberato un posto.`,
+      aulaStudioTitoloAppello: 'Aula Studio — Appello',
+      aulaStudioEsportaGiorno: 'Esporta il giorno (Excel)',
+      aulaStudioStudenti: 'studenti',
+      aulaStudioAggiungiManualmente: '+ Aggiungi studente',
+      aulaStudioAggiuntaManuale: 'Aggiunto manualmente',
+      aulaStudioColNome: 'Nome e Cognome',
+      aulaStudioColStato: 'Stato',
+      aulaStudioColPresenza: 'Presenza',
+      aulaStudioColPallini: 'Pallini nel semestre',
+      aulaStudioMotivoObbligatorio: 'Il motivo è obbligatorio.',
+      aulaStudioMotivoBloccoAutomatico: (n) => `Blocco deciso dal responsabile dopo il ${n}° pallino rosso nel semestre.`,
+      aulaStudioNuovoPallino: 'Nuovo pallino rosso',
+      aulaStudioMotivoPlaceholder: 'Motivo (es. non rispetta il silenzio)',
+      aulaStudioAggiungiPallino: 'Aggiungi pallino',
+      aulaStudioTerzoPallinoTitolo: '3° pallino rosso nel semestre',
+      aulaStudioGiorniLavorativi: 'Giorni lavorativi di blocco:',
+      aulaStudioAzioneBlocca: 'Blocca per N giorni lavorativi',
+      aulaStudioAzioneRifiuta: 'Rifiuta la prenotazione',
+      aulaStudioAzioneAltraPossibilita: "Dai un'altra possibilità",
+      aulaStudioPresenzaPresente: 'Presente',
+      aulaStudioPresenzaAssente: 'Assente',
+      aulaStudioPresenzaInRitardo: 'In Ritardo',
+      aulaStudioPresenzaUscitoAnticipo: 'Uscito Anticipo',
+      aulaStudioSceglieStato: 'Scegli stato',
+      aulaStudioNFasceSelezionate: (n) => `${n} fasce selezionate`,
+      fatto: 'Fatto',
+      aulaStudioPallino1: '1° pallino',
+      aulaStudioPallino2: '2° pallino',
+      aulaStudioPallino3: '3° pallino (blocco)',
+      aulaStudioImpostazioniTitolo: 'Impostazioni Aula Studio',
+      aulaStudioPostiTotali: 'Posti totali per fascia',
+      aulaStudioAnticipoMassimo: 'Anticipo massimo di prenotazione (giorni)',
+      aulaStudioAggiungiFascia: '+ Aggiungi fascia oraria',
+      aulaStudioFerieExtra: 'Ferie extra',
+      aulaStudioAggiungiFerie: '+ Aggiungi periodo di ferie',
+      aulaStudioSemestri: 'Semestri (per il reset dei pallini rossi)',
+      aulaStudioSemestriSpiegazione: 'Formato MM-DD. I pallini rossi si azzerano automaticamente a ogni nuovo semestre.',
+      aulaStudioSemestre1: '1° semestre (inizio)',
+      aulaStudioSemestre2: '2° semestre (inizio)',
+      aulaStudioAlmenoUnaFascia: 'Configura almeno una fascia oraria.',
+      aulaStudioFormatoOrarioNonValido: 'Formato orario non valido, usa HH:MM.',
+      aulaStudioFormatoDataNonValido: 'Formato data non valido, usa YYYY-MM-DD.',
+      aulaStudioConfigSalvata: 'Configurazione salvata.',
+      aulaStudioTipoMedie: 'Medie',
+      aulaStudioTipoIpi: 'IPI',
+      aulaStudioRegistrazioneTitolo: 'Registrazione Aula Studio',
+      aulaStudioRegistrazioneSottotitolo: 'Va fatta una sola volta: i tuoi dati verranno usati per tutte le prenotazioni future.',
+      aulaStudioSceglieTipoScuola: 'Scegli il tipo di scuola',
+      aulaStudioSceglieClasse: 'Scegli la classe',
+      aulaStudioScegliereClasse: 'Devi scegliere una classe.',
+      aulaStudioNessunaClasseDisponibile: 'Nessuna classe disponibile per questo tipo di scuola. Contatta la segreteria.',
+      aulaStudioConfermaRegistrazione: 'Conferma registrazione',
+      aulaStudioGiornoAttivo: 'Giorno prenotabile',
+      aulaStudioColNumero: 'Numero',
+      aulaStudioColGiorno: 'Giorno',
+      aulaStudioColAzioni: 'Azioni',
+      aulaStudioSoloStudenti: 'Aula Studio è disponibile solo per gli studenti.',
+      classiDaClassificare: 'Da classificare',
+      classificaComeMedie: 'Segna tutte come Medie',
+      classificaComeIpi: 'Segna tutte come IPI',
+      confermaClassificaClassiBulk: (n, tipo) => `Classificare tutte le ${n} classi "Da classificare" come ${tipo}? Questa azione non può essere annullata singolarmente.`,
+      avanti: 'Avanti'
     },
     ar: {
       appName: 'إدارة قاعات DBALEX',
@@ -713,9 +846,9 @@ const t = (key, lang, ...args) => {
       erroreCreazioneAccount: 'خطأ في إنشاء الحساب',
       notaUtenteManualeBypass: 'يمكن للمدير إنشاء حسابات بأي بريد إلكتروني، حتى خارج النطاقات المسموح بها. سيصل للمستخدم رابط لتعيين كلمة المرور، دون الحاجة لتحقق إضافي من البريد.',
       eliminaUtenteAzione: 'حذف',
-      confermaEliminaUtenteMessaggio: (nome) => `هل تريد إزالة ${nome} من القائمة؟ سيتم إزالته فقط من التطبيق: يبقى حساب الدخول الخاص به نشطاً على Firebase حتى تحذفه يدوياً من Firebase Console > Authentication.`,
-      utenteRimossoDallaLista: 'تمت إزالة المستخدم من القائمة. تذكير: يبقى حساب الدخول نشطاً على Firebase Auth حتى تحذفه يدوياً من الكونسول.',
-      notaEliminaUtenteLista: 'حذف مستخدم من هنا يزيله فقط من هذه القائمة (Firestore): يبقى حساب الدخول الخاص به على Firebase Authentication نشطاً. لحذفه نهائياً، اذهب إلى Firebase Console > Authentication واحذفه يدوياً من هناك.',
+      confermaEliminaUtenteMessaggio: (nome) => `هل تريد حذف ${nome} نهائياً؟ سيتم حذفه من التطبيق ومن حساب الدخول على Firebase: هذا الإجراء لا يمكن التراجع عنه.`,
+      utenteRimossoDallaLista: 'تم حذف المستخدم نهائياً، من التطبيق ومن حساب الدخول على Firebase.',
+      notaEliminaUtenteLista: 'حذف مستخدم من هنا يحذفه نهائياً: من القائمة (Firestore) ومن حساب الدخول على Firebase Authentication.',
       toccaRigaUtente: 'اضغط على مستخدم لتغيير دوره أو حذفه',
       colonnaStatoEmail: 'الحالة',
       scaricaAppAndroidTitolo: 'تفضل التطبيق؟ حمّله لنظام أندرويد',
@@ -732,7 +865,6 @@ const t = (key, lang, ...args) => {
       nessunDominio: 'لا توجد نطاقات محددة: التسجيل متاح لأي بريد إلكتروني.',
       classi: 'الفصول',
       gestioneClassi: 'إدارة الفصول',
-      nomeClasse: 'اسم الفصل',
       aggiungiClasse: '+ إضافة فصل',
       salvaClasse: 'حفظ',
       annullaModifica: 'إلغاء',
@@ -944,6 +1076,7 @@ const t = (key, lang, ...args) => {
       sezioneNotifiche: 'الإشعارات',
       gruppoNotifichePrenotazione: 'الحجز',
       gruppoNotificheManutenzione: 'الصيانة',
+      gruppoNotificheAulaStudio: 'قاعة الدراسة',
       sezioneGestioneUtenti: 'إدارة المستخدمين',
       notificaNuovaRichiestaTitolo: (aula) => `طلب حجز جديد: ${aula}`,
       notificaNuovaRichiestaCorpo: (utente, aula, data) => `${utente} طلب حجز "${aula}" بتاريخ ${data}.`,
@@ -1005,7 +1138,110 @@ const t = (key, lang, ...args) => {
       sezBlocchi: 'الحظر',
       sezReset: 'إعادة التعيين',
       sezEsportazione: 'التصدير',
-      sezRuoliPersonalizzati: 'الأدوار المخصصة'
+      sezRuoliPersonalizzati: 'الأدوار المخصصة',
+      sezAulaStudio: 'قاعة الدراسة',
+
+      // ---- AULA STUDIO (عربي) ----
+      navAulaStudio: 'قاعة الدراسة',
+      successo: 'تم بنجاح',
+      cognome: 'اسم العائلة',
+      oggi: 'اليوم',
+      salva: 'حفظ',
+      resetLabel: 'إعادة تعيين',
+      tipoLabel: 'النوع',
+      dettaglioLabel: 'التفاصيل',
+      permessoLabel: 'الصلاحية',
+      attivoLabel: 'مفعّل',
+      chiudiLabel: 'إغلاق',
+      aulaStudioTitoloSezione: 'قاعة الدراسة',
+      aulaStudioSchedaPrenota: 'حجز',
+      aulaStudioSchedaMiePrenotazioni: 'حجوزاتي',
+      aulaStudioScegliAula: 'اختر القاعة',
+      aulaStudioScegliGiorno: 'اختر اليوم',
+      aulaStudioNessunGiornoDisponibile: 'لا يوجد يوم متاح للحجز حاليًا.',
+      aulaStudioClasse: 'الفصل',
+      aulaStudioNumeroInClasse: 'الرقم في الفصل',
+      aulaStudioFasceOrarie: 'الفترات الزمنية',
+      aulaStudioListaAttesa: (n) => `قائمة الانتظار (${n})`,
+      aulaStudioPostiLiberi: (n) => `${n} مقعد متاح`,
+      aulaStudioFasciaGiaIniziata: 'الفترة بدأت بالفعل',
+      aulaStudioPrenota: 'احجز',
+      aulaStudioNessunaPrenotazione: 'لا توجد حجوزات.',
+      aulaStudioStatoConfermata: 'مؤكد',
+      aulaStudioStatoInAttesa: 'في قائمة الانتظار',
+      aulaStudioCompilaDatiStudente: 'يرجى إدخال الاسم واللقب والفصل والرقم.',
+      aulaStudioSelezionaAlmenoUnaFascia: 'اختر فترة زمنية واحدة على الأقل.',
+      aulaStudioBloccoAttivoMessaggio: (data) => `الحجز غير مسموح: حظر ساري حتى ${data}.`,
+      aulaStudioConflittoAltraAula: (fascia) => `لديك حجز بالفعل لهذه الفترة ${fascia} في قاعة أخرى.`,
+      aulaStudioPrenotazioneConfermata: 'تم تأكيد الحجز.',
+      aulaStudioPrenotazioneInAttesa: 'تمت إضافتك إلى قائمة الانتظار: سيصلك إشعار إذا توفر مقعد.',
+      aulaStudioPrenotazioneParzialeAttesa: 'تم تأكيد بعض الفترات، والبعض الآخر في قائمة الانتظار.',
+      aulaStudioErroreGenerico: 'حدث خطأ ما. حاول مرة أخرى.',
+      aulaStudioPalliniMessaggio: (n) => `تنبيه: ${n} نقطة حمراء في هذا الفصل الدراسي.`,
+      aulaStudioNotificaPromossoTitolo: 'تم تأكيد الحجز',
+      aulaStudioNotificaPromossoCorpo: (aula, data, fascia) => `تم تأكيد حجزك في ${aula} يوم ${data} (${fascia}): توفر مقعد.`,
+      aulaStudioTitoloAppello: 'قاعة الدراسة — الحضور',
+      aulaStudioEsportaGiorno: 'تصدير اليوم (Excel)',
+      aulaStudioStudenti: 'طلاب',
+      aulaStudioAggiungiManualmente: '+ إضافة طالب يدويًا',
+      aulaStudioAggiuntaManuale: 'أُضيف يدويًا',
+      aulaStudioColNome: 'الاسم الكامل',
+      aulaStudioColStato: 'الحالة',
+      aulaStudioColPresenza: 'الحضور',
+      aulaStudioColPallini: 'النقاط الحمراء في الفصل الدراسي',
+      aulaStudioMotivoObbligatorio: 'السبب مطلوب.',
+      aulaStudioMotivoBloccoAutomatico: (n) => `حظر قرره المسؤول بعد النقطة الحمراء رقم ${n} في الفصل الدراسي.`,
+      aulaStudioNuovoPallino: 'نقطة حمراء جديدة',
+      aulaStudioMotivoPlaceholder: 'السبب (مثال: لا يحترم الهدوء)',
+      aulaStudioAggiungiPallino: 'إضافة نقطة',
+      aulaStudioTerzoPallinoTitolo: 'النقطة الحمراء الثالثة في الفصل الدراسي',
+      aulaStudioGiorniLavorativi: 'أيام العمل للحظر:',
+      aulaStudioAzioneBlocca: 'حظر لعدد أيام عمل',
+      aulaStudioAzioneRifiuta: 'رفض الحجز',
+      aulaStudioAzioneAltraPossibilita: 'منح فرصة أخرى',
+      aulaStudioPresenzaPresente: 'حاضر',
+      aulaStudioPresenzaAssente: 'غائب',
+      aulaStudioPresenzaInRitardo: 'متأخر',
+      aulaStudioPresenzaUscitoAnticipo: 'خرج مبكرًا',
+      aulaStudioSceglieStato: 'اختر الحالة',
+      aulaStudioNFasceSelezionate: (n) => `${n} فترات محددة`,
+      fatto: 'تم',
+      aulaStudioPallino1: 'النقطة الأولى',
+      aulaStudioPallino2: 'النقطة الثانية',
+      aulaStudioPallino3: 'النقطة الثالثة (حظر)',
+      aulaStudioImpostazioniTitolo: 'إعدادات قاعة الدراسة',
+      aulaStudioPostiTotali: 'إجمالي المقاعد لكل فترة',
+      aulaStudioAnticipoMassimo: 'أقصى مدة للحجز المسبق (أيام)',
+      aulaStudioAggiungiFascia: '+ إضافة فترة زمنية',
+      aulaStudioFerieExtra: 'عطلات إضافية',
+      aulaStudioAggiungiFerie: '+ إضافة فترة عطلة',
+      aulaStudioSemestri: 'الفصول الدراسية (لإعادة ضبط النقاط الحمراء)',
+      aulaStudioSemestriSpiegazione: 'الصيغة MM-DD. يتم صفر النقاط الحمراء تلقائيًا مع بداية كل فصل دراسي.',
+      aulaStudioSemestre1: 'بداية الفصل الدراسي الأول',
+      aulaStudioSemestre2: 'بداية الفصل الدراسي الثاني',
+      aulaStudioAlmenoUnaFascia: 'أضف فترة زمنية واحدة على الأقل.',
+      aulaStudioFormatoOrarioNonValido: 'صيغة الوقت غير صحيحة، استخدم HH:MM.',
+      aulaStudioFormatoDataNonValido: 'صيغة التاريخ غير صحيحة، استخدم YYYY-MM-DD.',
+      aulaStudioConfigSalvata: 'تم حفظ الإعدادات.',
+      aulaStudioTipoMedie: 'متوسطة',
+      aulaStudioTipoIpi: 'IPI',
+      aulaStudioRegistrazioneTitolo: 'تسجيل قاعة الدراسة',
+      aulaStudioRegistrazioneSottotitolo: 'مرة واحدة فقط: ستُستخدم بياناتك في كل الحجوزات القادمة.',
+      aulaStudioSceglieTipoScuola: 'اختر نوع المدرسة',
+      aulaStudioSceglieClasse: 'اختر الفصل',
+      aulaStudioScegliereClasse: 'يجب اختيار فصل.',
+      aulaStudioNessunaClasseDisponibile: 'لا يوجد فصل متاح لهذا النوع من المدرسة. تواصل مع الإدارة.',
+      aulaStudioConfermaRegistrazione: 'تأكيد التسجيل',
+      aulaStudioGiornoAttivo: 'يوم متاح للحجز',
+      aulaStudioColNumero: 'الرقم',
+      aulaStudioColGiorno: 'اليوم',
+      aulaStudioColAzioni: 'إجراءات',
+      aulaStudioSoloStudenti: 'قاعة الدراسة متاحة فقط للطلاب.',
+      classiDaClassificare: 'غير مصنّف',
+      classificaComeMedie: 'تصنيف الكل كمتوسطة',
+      classificaComeIpi: 'تصنيف الكل كـ IPI',
+      confermaClassificaClassiBulk: (n, tipo) => `هل تريد تصنيف كل الفصول غير المصنّفة (${n}) كـ ${tipo}؟ لا يمكن التراجع عن هذا الإجراء دفعة واحدة.`,
+      avanti: 'التالي'
     }
   };
   const val = dict[lang]?.[key] || dict['it'][key] || key;
@@ -1032,6 +1268,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -1117,7 +1355,7 @@ const getThemeColors = (isDark) => ({
 
 
 const getCategorieVisibili = (ruolo, lang) => {
-  const visibili = [];
+  const visibili: any[] = [];
   visibili.push({
     key: CATEGORIE_NOTIFICHE.ESITO_PRENOTAZIONE,
     label: ETICHETTE_CATEGORIE[lang]?.[CATEGORIE_NOTIFICHE.ESITO_PRENOTAZIONE] || 'Esito prenotazione'
@@ -1140,6 +1378,18 @@ const getCategorieVisibili = (ruolo, lang) => {
     visibili.push({
       key: CATEGORIE_NOTIFICHE.FINE_LAVORO,
       label: ETICHETTE_CATEGORIE[lang]?.[CATEGORIE_NOTIFICHE.FINE_LAVORO] || 'Fine lavoro (segnalazione risolta)'
+    });
+  }
+  if (puoGestireAulaStudio(ruolo)) {
+    visibili.push({
+      key: CATEGORIE_NOTIFICHE.RICHIESTA_TURNO_AULA_STUDIO,
+      label: ETICHETTE_CATEGORIE[lang]?.[CATEGORIE_NOTIFICHE.RICHIESTA_TURNO_AULA_STUDIO] || 'Nuova richiesta di turno Aula Studio'
+    });
+  }
+  if (ruolo === 'insegnante') {
+    visibili.push({
+      key: CATEGORIE_NOTIFICHE.ESITO_TURNO_AULA_STUDIO,
+      label: ETICHETTE_CATEGORIE[lang]?.[CATEGORIE_NOTIFICHE.ESITO_TURNO_AULA_STUDIO] || 'Esito richiesta di turno Aula Studio'
     });
   }
   return visibili;
@@ -1169,8 +1419,8 @@ const TIPI_REGISTRO = {
 export default function App() {
   const [lang, setLang] = useState('it');
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [utentePermessiTarget, setUtentePermessiTarget] = useState(null);
-  const [permessiModifica, setPermessiModifica] = useState({});
+  const [utentePermessiTarget, setUtentePermessiTarget] = useState<any>(null);
+  const [permessiModifica, setPermessiModifica] = useState<Record<string, any>>({});
   const isRTL = lang === 'ar';
 
   const insets = useSafeAreaInsets();
@@ -1190,10 +1440,10 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState('utente');
   const [userName, setUserName] = useState('');
-  const [notifichePrefs, setNotifichePrefs] = useState({});
+  const [notifichePrefs, setNotifichePrefs] = useState<Record<string, any>>({});
   const [initializing, setInitializing] = useState(true);
 
   // ---- BIOMETRICO ----
@@ -1207,30 +1457,30 @@ export default function App() {
   const [emailNonVerificata, setEmailNonVerificata] = useState(false);
 
   // ---- NOTIFICHE ----
-  const [notificheLista, setNotificheLista] = useState([]);
+  const [notificheLista, setNotificheLista] = useState<any[]>([]);
   const [modalNotifiche, setModalNotifiche] = useState(false);
 
   // ---- STATI PRINCIPALI (AULE, PRENOTAZIONI, ECC.) ----
-  const [sezioneSelezionata, setSezioneSelezionata] = useState(null);
+  const [sezioneSelezionata, setSezioneSelezionata] = useState<any>(null);
   const [vistaAttiva, setVistaAttiva] = useState('home');
+  // Id di una richiesta di turno Aula Studio da aprire automaticamente (deep-link da una notifica).
+  const [richiestaTurnoDaAprireId, setRichiestaTurnoDaAprireId] = useState<string | null>(null);
 
-  const [aule, setAule] = useState([]);
-  const [prenotazioni, setPrenotazioni] = useState([]);
-  const [dominiLista, setDominiLista] = useState([]);
-  const [classiLista, setClassiLista] = useState([]);
-  const [utentiLista, setUtentiLista] = useState([]);
-  const [sezioniLista, setSezioniLista] = useState([]);
+  const [aule, setAule] = useState<any[]>([]);
+  const [prenotazioni, setPrenotazioni] = useState<any[]>([]);
+  const [dominiLista, setDominiLista] = useState<any[]>([]);
+  const [classiLista, setClassiLista] = useState<any[]>([]);
+  const [utentiLista, setUtentiLista] = useState<any[]>([]);
+  const [sezioniLista, setSezioniLista] = useState<any[]>([]);
 
   // ---- STATI PER MODALITÀ MODIFICA E GESTIONE ----
   const [nuovaSezioneNome, setNuovaSezioneNome] = useState('');
   const [nuovaSezioneNomeAr, setNuovaSezioneNomeAr] = useState('');
   const [modalNuovaSezione, setModalNuovaSezione] = useState(false);
-  const [modalitaModificaSezioni, setModalitaModificaSezioni] = useState(false);
-  const [modalitaModificaAule, setModalitaModificaAule] = useState(false);
   const [modalitaModificaClassi, setModalitaModificaClassi] = useState(false);
   const [mostraFormAggiungiClasse, setMostraFormAggiungiClasse] = useState(false);
 
-  const [sezioneInModifica, setSezioneInModifica] = useState(null);
+  const [sezioneInModifica, setSezioneInModifica] = useState<any>(null);
   const [nomeSezioneInModifica, setNomeSezioneInModifica] = useState('');
   const [nomeSezioneInModificaAr, setNomeSezioneInModificaAr] = useState('');
   const [modalModificaSezione, setModalModificaSezione] = useState(false);
@@ -1263,34 +1513,34 @@ export default function App() {
   const [archivioManutenzioneMeseDropdownAperto, setArchivioManutenzioneMeseDropdownAperto] = useState(false);
 
   // ---- CALENDARIO ----
-  const [calendarioMeseSelezionato, setCalendarioMeseSelezionato] = useState(null);
-  const [giornoCalendarioSelezionato, setGiornoCalendarioSelezionato] = useState(null);
+  const [calendarioMeseSelezionato, setCalendarioMeseSelezionato] = useState<any>(null);
+  const [giornoCalendarioSelezionato, setGiornoCalendarioSelezionato] = useState<any>(null);
 
   // ---- GESTIONE PRENOTAZIONI ----
-  const [gestioneMeseSelezionato, setGestioneMeseSelezionato] = useState(null);
-  const [giornoGestioneSelezionato, setGiornoGestioneSelezionato] = useState(null);
+  const [gestioneMeseSelezionato, setGestioneMeseSelezionato] = useState<any>(null);
+  const [giornoGestioneSelezionato, setGiornoGestioneSelezionato] = useState<any>(null);
   const [gestioneVistaSpeciali, setGestioneVistaSpeciali] = useState(false);
-  const [prenotazioneDettaglio, setPrenotazioneDettaglio] = useState(null);
+  const [prenotazioneDettaglio, setPrenotazioneDettaglio] = useState<any>(null);
 
   // ---- MANUTENZIONE ----
-  const [manutenzioneLista, setManutenzioneLista] = useState([]);
+  const [manutenzioneLista, setManutenzioneLista] = useState<any[]>([]);
   const [modalNuovaSegnalazione, setModalNuovaSegnalazione] = useState(false);
-  const [aulaManutenzioneSelezionata, setAulaManutenzioneSelezionata] = useState(null);
+  const [aulaManutenzioneSelezionata, setAulaManutenzioneSelezionata] = useState<any>(null);
   const [aulaManutenzioneDropdownAperto, setAulaManutenzioneDropdownAperto] = useState(false);
-  const [tipoGuastoSelezionato, setTipoGuastoSelezionato] = useState(null);
+  const [tipoGuastoSelezionato, setTipoGuastoSelezionato] = useState<any>(null);
   const [descrizioneGuasto, setDescrizioneGuasto] = useState('');
   const [filtroStatoManutenzione, setFiltroStatoManutenzione] = useState('Tutte');
   const [filtroStatoManutenzioneDropdownAperto, setFiltroStatoManutenzioneDropdownAperto] = useState(false);
-  const [segnalazioneDettaglio, setSegnalazioneDettaglio] = useState(null);
+  const [segnalazioneDettaglio, setSegnalazioneDettaglio] = useState<any>(null);
   const [nuovaVoceDiario, setNuovaVoceDiario] = useState('');
 
   // ---- UTENTI (RUOLO, DETTAGLIO) ----
-  const [utenteRuoloModalTarget, setUtenteRuoloModalTarget] = useState(null);
-  const [utenteDettaglioTarget, setUtenteDettaglioTarget] = useState(null);
+  const [utenteRuoloModalTarget, setUtenteRuoloModalTarget] = useState<any>(null);
+  const [utenteDettaglioTarget, setUtenteDettaglioTarget] = useState<any>(null);
   const [filtroMeseCalendarioDropdownAperto, setFiltroMeseCalendarioDropdownAperto] = useState(false);
 
   // ---- PRENOTAZIONE MODALE ----
-  const [aulaInPrenotazione, setAulaInPrenotazione] = useState(null);
+  const [aulaInPrenotazione, setAulaInPrenotazione] = useState<any>(null);
   const [dataPrenotazioneObj, setDataPrenotazioneObj] = useState(new Date());
   const [dataPrenotazione, setDataPrenotazione] = useState(new Date().toISOString().split('T')[0]);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -1298,23 +1548,23 @@ export default function App() {
   const [dataFineRipetizione, setDataFineRipetizione] = useState('');
   const [dataFineRipetizioneObj, setDataFineRipetizioneObj] = useState(new Date());
   const [showDatePickerFine, setShowDatePickerFine] = useState(false);
-  const [fasceSelezionate, setFasceSelezionate] = useState([]);
+  const [fasceSelezionate, setFasceSelezionate] = useState<any[]>([]);
   const [motivo, setMotivo] = useState('');
   const [classe, setClasse] = useState('');
   const [insegnanteRiferimento, setInsegnanteRiferimento] = useState('');
-  const [studenteIPI, setStudenteIPI] = useState(null);
+  const [studenteIPI, setStudenteIPI] = useState<any>(null);
   const [partecipanti, setPartecipanti] = useState(['']);
 
   // ---- AULA MODALE ----
   const [modalNuovaAula, setModalNuovaAula] = useState(false);
-  const [aulaInModifica, setAulaInModifica] = useState(null);
+  const [aulaInModifica, setAulaInModifica] = useState<any>(null);
   const [nomeNuovaAula, setNomeNuovaAula] = useState('');
   const [nomeNuovaAulaAr, setNomeNuovaAulaAr] = useState('');
   const [capienzaNuovaAula, setCapienzaNuovaAula] = useState('');
 
   // ---- BLOCCO AULA ----
   const [modalBloccoAula, setModalBloccoAula] = useState(false);
-  const [aulaDaBloccare, setAulaDaBloccare] = useState(null);
+  const [aulaDaBloccare, setAulaDaBloccare] = useState<any>(null);
   const [dataInizioBlocco, setDataInizioBlocco] = useState('');
   const [dataInizioBloccoObj, setDataInizioBloccoObj] = useState(new Date());
   const [showDatePickerBloccoInizio, setShowDatePickerBloccoInizio] = useState(false);
@@ -1326,8 +1576,8 @@ export default function App() {
   // ---- IMPOSTAZIONI ----
   const [impostazioniVista, setImpostazioniVista] = useState('menu');
   const [esportaTipoSelezionato, setEsportaTipoSelezionato] = useState('prenotazioni');
-  const [righeEspanseBloccoUtenti, setRigheEspanseBloccoUtenti] = useState({}); // solo Android: id utente -> true se la riga della tabella "Blocca" è aperta
-  const [righeEspansePermessiAvanzati, setRigheEspansePermessiAvanzati] = useState({}); // solo Android: id utente -> true se la riga della tabella "Impostazioni Avanzate" è aperta
+  const [righeEspanseBloccoUtenti, setRigheEspanseBloccoUtenti] = useState<Record<string, any>>({}); // solo Android: id utente -> true se la riga della tabella "Blocca" è aperta
+  const [righeEspansePermessiAvanzati, setRigheEspansePermessiAvanzati] = useState<Record<string, any>>({}); // solo Android: id utente -> true se la riga della tabella "Impostazioni Avanzate" è aperta
 
   // ---- AGGIUNGI UTENTE ----
   const [modalAggiungiUtente, setModalAggiungiUtente] = useState(false);
@@ -1339,13 +1589,15 @@ export default function App() {
   const [nuovoRuoloPersonalizzatoAttivo, setNuovoRuoloPersonalizzatoAttivo] = useState(false);
   const [nuovoDominio, setNuovoDominio] = useState('');
   const [nuovaClasseNome, setNuovaClasseNome] = useState('');
-  const [classeInModifica, setClasseInModifica] = useState(null);
+  const [classeInModifica, setClasseInModifica] = useState<any>(null);
+  const [nuovaClasseTipo, setNuovaClasseTipo] = useState('medie');
 
   // ---- NUOVI STATI PER PROFILI E SCADENZA ----
   const [profiloDaCompletare, setProfiloDaCompletare] = useState(false); // true se l'utente deve completare il profilo
+  const [necessitaDatiAulaStudio, setNecessitaDatiAulaStudio] = useState(false); // true se uno studente già registrato deve ancora completare tipo scuola/classe/numero registro
   const [modalProfiloPersonale, setModalProfiloPersonale] = useState(false); // modale profilo personale
-  const [utenteProfiloModifica, setUtenteProfiloModifica] = useState(null); // utente selezionato per modifica profilo (da sezione Profili)
-  const [profiloModificaDati, setProfiloModificaDati] = useState({}); // dati del form di modifica profilo (nome, anno, classe, dataNascita, dataScadenza); il Ruolo si legge da utenteProfiloModifica.role
+  const [utenteProfiloModifica, setUtenteProfiloModifica] = useState<any>(null); // utente selezionato per modifica profilo (da sezione Profili)
+  const [profiloModificaDati, setProfiloModificaDati] = useState<Record<string, any>>({}); // dati del form di modifica profilo (nome, anno, classe, dataNascita, dataScadenza); il Ruolo si legge da utenteProfiloModifica.role
   const [modalScegliClasseProfilo, setModalScegliClasseProfilo] = useState(false);
   const [modalScegliRuoloProfilo, setModalScegliRuoloProfilo] = useState(false);
   const [filtroRuoloProfiliDropdownAperto, setFiltroRuoloProfiliDropdownAperto] = useState(false);
@@ -1359,13 +1611,18 @@ export default function App() {
   });
 
   // ---- STATI PER SCHERMATA COMPLETA PROFILO ----
-  const [tipoUtenteScelto, setTipoUtenteScelto] = useState(null); // 'studente' | 'insegnante'
+  const [tipoUtenteScelto, setTipoUtenteScelto] = useState<any>(null); // 'studente' | 'insegnante'
   const [annoScolasticoScelto, setAnnoScolasticoScelto] = useState('');
   const [classeScelta, setClasseScelta] = useState('');
   const [modalScegliClasseRegistrazione, setModalScegliClasseRegistrazione] = useState(false);
   const [dataNascitaScelta, setDataNascitaScelta] = useState('');
   const [dataNascitaObj, setDataNascitaObj] = useState(new Date());
   const [showDatePickerNascita, setShowDatePickerNascita] = useState(false);
+  // MODIFICATO: dati Aula Studio chiesti allo studente nello stesso step di completamento profilo
+  // (o, per chi è già registrato, nel mini-form una tantum al prossimo accesso).
+  const [aulaStudioTipoScuolaScelto, setAulaStudioTipoScuolaScelto] = useState<any>(null); // 'medie' | 'ipi'
+  const [aulaStudioNumeroRegistroScelto, setAulaStudioNumeroRegistroScelto] = useState('');
+  const [salvandoDatiAulaStudio, setSalvandoDatiAulaStudio] = useState(false);
 
   // ---- STATI PER AGGIUNTA UTENTE CON PROFILO TEMPORANEO ----
   const [isTemporaneo, setIsTemporaneo] = useState(false);
@@ -1373,8 +1630,8 @@ export default function App() {
   const [showDatePickerScadenza, setShowDatePickerScadenza] = useState(false);
 
   // ---- REGISTRO ATTIVITÀ ----
-  const [registroAttivita, setRegistroAttivita] = useState([]);
-  const [registroDettaglio, setRegistroDettaglio] = useState(null); // solo Android: riga registro attività selezionata
+  const [registroAttivita, setRegistroAttivita] = useState<any[]>([]);
+  const [registroDettaglio, setRegistroDettaglio] = useState<any>(null); // solo Android: riga registro attività selezionata
   const [filtroTipoRegistro, setFiltroTipoRegistro] = useState('Tutte');
   const [filtroModalitaRegistro, setFiltroModalitaRegistro] = useState('mensile');
   const [filtroMeseRegistro, setFiltroMeseRegistro] = useState(new Date().toISOString().slice(0, 7));
@@ -1404,7 +1661,7 @@ export default function App() {
   };
 
   // Stile per input date su web
-  const webDateInputStyle = {
+  const webDateInputStyle: any = {
     backgroundColor: colors.surface,
     color: colors.textMain,
     padding: 12,
@@ -1452,7 +1709,7 @@ export default function App() {
   const caricaRegistroAttivita = async () => {
     try {
       const snap = await getDocs(collection(db, 'registro_attivita'));
-      const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const lista = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
       lista.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
       setRegistroAttivita(lista);
     } catch (e) {
@@ -1540,7 +1797,7 @@ export default function App() {
             await updateDoc(doc(db, 'users', firebaseUser.uid), { bloccato: true });
             await signOut(auth);
             setLoading(false);
-            setBlockedMessage(`${t('profiloScaduto', lang)} ${formattaDataOra(datiUtente.dataScadenza)}.`);
+            setBlockedMessage(`${t('profiloScaduto', lang)} ${formattaDataOra(datiUtente.dataScadenza, lang)}.`);
             return;
           }
 
@@ -1578,6 +1835,17 @@ export default function App() {
           } else {
             setProfiloDaCompletare(false);
           }
+          // MODIFICATO: studenti già registrati prima dell'introduzione di
+          // Aula Studio non hanno ancora tipo scuola/classe/numero di
+          // registro: li completano una tantum al prossimo accesso.
+          setNecessitaDatiAulaStudio(datiUtente.role === 'studente' && !datiUtente.aulaStudioProfiloCompletato);
+          // MODIFICATO: le classi (con il campo "tipo" Medie/IPI) servono già
+          // durante la schermata di completamento profilo, che va in scena
+          // PRIMA di caricaDatiGenerali(): le carichiamo qui a parte.
+          try {
+            const snapClassiPrecoce = await getDocs(collection(db, 'classi'));
+            setClassiLista(snapClassiPrecoce.docs.map(d => ({ id: d.id, ...(d.data() as any) })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+          } catch (e) {}
         }
       }
 
@@ -1700,6 +1968,16 @@ export default function App() {
         mostraAlert(t('attenzione', lang), t('classe', lang) + ' obbligatoria.');
         return;
       }
+      // MODIFICATO: allo stesso passo chiediamo anche i dati per Aula Studio,
+      // così lo studente non deve più fare una registrazione separata dopo.
+      if (!aulaStudioTipoScuolaScelto) {
+        mostraAlert(t('attenzione', lang), t('aulaStudioSceglieTipoScuola', lang));
+        return;
+      }
+      if (!aulaStudioNumeroRegistroScelto.trim()) {
+        mostraAlert(t('attenzione', lang), t('aulaStudioNumeroInClasse', lang) + ' obbligatorio.');
+        return;
+      }
     }
     try {
       await updateDoc(doc(db, 'users', user.uid), {
@@ -1711,6 +1989,17 @@ export default function App() {
         classe: tipoUtenteScelto === 'studente' ? classeScelta : null,
         profiloCompleto: true
       });
+      if (tipoUtenteScelto === 'studente') {
+        const { nome: nomeSep, cognome: cognomeSep } = separaNomeCognomeAulaStudio(userName);
+        await salvaProfiloAulaStudio(db, user.uid, {
+          tipoScuola: aulaStudioTipoScuolaScelto,
+          classe: classeScelta,
+          numeroRegistro: aulaStudioNumeroRegistroScelto.trim(),
+          nomeStudente: nomeSep,
+          cognomeStudente: cognomeSep,
+        });
+        setNecessitaDatiAulaStudio(false);
+      }
       setUserRole(tipoUtenteScelto);
       setProfiloDaCompletare(false);
       caricaDatiGenerali();
@@ -1720,25 +2009,58 @@ export default function App() {
     }
   };
 
+  // ---- COMPLETAMENTO DATI AULA STUDIO (per studenti già registrati prima di questa funzione) ----
+  const completaDatiAulaStudioEsistente = async () => {
+    if (!aulaStudioTipoScuolaScelto) {
+      mostraAlert(t('attenzione', lang), t('aulaStudioSceglieTipoScuola', lang));
+      return;
+    }
+    if (!classeScelta) {
+      mostraAlert(t('attenzione', lang), t('aulaStudioScegliereClasse', lang));
+      return;
+    }
+    if (!aulaStudioNumeroRegistroScelto.trim()) {
+      mostraAlert(t('attenzione', lang), t('aulaStudioNumeroInClasse', lang) + ' obbligatorio.');
+      return;
+    }
+    setSalvandoDatiAulaStudio(true);
+    try {
+      const { nome: nomeSep, cognome: cognomeSep } = separaNomeCognomeAulaStudio(userName);
+      await salvaProfiloAulaStudio(db, user.uid, {
+        tipoScuola: aulaStudioTipoScuolaScelto,
+        classe: classeScelta,
+        numeroRegistro: aulaStudioNumeroRegistroScelto.trim(),
+        nomeStudente: nomeSep,
+        cognomeStudente: cognomeSep,
+      });
+      setNecessitaDatiAulaStudio(false);
+      caricaDatiGenerali();
+    } catch (e) {
+      mostraAlert(t('errore', lang), e.message);
+    } finally {
+      setSalvandoDatiAulaStudio(false);
+    }
+  };
+
   // ---- CARICA DATI GENERALI (aule, prenotazioni, utenti, sezioni, manutenzione, notifiche) ----
   const caricaDatiGenerali = async () => {
     try {
       let snapAule = await getDocs(collection(db, 'aule'));
       if (snapAule.empty) {
         const auleIniziali = [
-          { nome: 'Aula Magna', capienza: '120', sezione: 'Scuola Base', ordine: 0 },
-          { nome: 'Laboratorio 1', capienza: '25', sezione: 'Scuola Base', ordine: 1 },
-          { nome: 'Aula 1A', capienza: '30', sezione: 'Scuola Media', ordine: 0 },
-          { nome: 'Aula 2B', capienza: '28', sezione: 'Scuola Media', ordine: 1 },
-          { nome: 'Officina Meccanica', capienza: '20', sezione: 'Scuola Professionale', ordine: 0 },
-          { nome: 'Lab Elettrico', capienza: '18', sezione: 'Scuola Professionale', ordine: 1 },
-          { nome: 'Sala Consiliare', capienza: '50', sezione: 'Comuni', ordine: 0 },
-          { nome: 'Sala Polifunzionale', capienza: '80', sezione: 'Comuni', ordine: 1 }
+          { nome: 'Aula Magna', nomeAr: 'القاعة الكبرى', capienza: '120', sezione: 'Scuola Base', ordine: 0 },
+          { nome: 'Laboratorio 1', nomeAr: 'المختبر ١', capienza: '25', sezione: 'Scuola Base', ordine: 1 },
+          { nome: 'Aula 1A', nomeAr: 'فصل ١أ', capienza: '30', sezione: 'Scuola Media', ordine: 0 },
+          { nome: 'Aula 2B', nomeAr: 'فصل ٢ب', capienza: '28', sezione: 'Scuola Media', ordine: 1 },
+          { nome: 'Officina Meccanica', nomeAr: 'ورشة الميكانيكا', capienza: '20', sezione: 'Scuola Professionale', ordine: 0 },
+          { nome: 'Lab Elettrico', nomeAr: 'مختبر الكهرباء', capienza: '18', sezione: 'Scuola Professionale', ordine: 1 },
+          { nome: 'Sala Consiliare', nomeAr: 'قاعة المجلس', capienza: '50', sezione: 'Comuni', ordine: 0 },
+          { nome: 'Sala Polifunzionale', nomeAr: 'القاعة متعددة الأغراض', capienza: '80', sezione: 'Comuni', ordine: 1 }
         ];
         for (const a of auleIniziali) { await addDoc(collection(db, 'aule'), a); }
         snapAule = await getDocs(collection(db, 'aule'));
       }
-      setAule(snapAule.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+      setAule(snapAule.docs.map(d => ({ id: d.id, ...(d.data() as any) })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
 
       const snapPrenotazioni = await getDocs(collection(db, 'prenotazioni'));
       setPrenotazioni(snapPrenotazioni.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -1753,7 +2075,7 @@ export default function App() {
         }
         snapClassi = await getDocs(collection(db, 'classi'));
       }
-      setClassiLista(snapClassi.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+      setClassiLista(snapClassi.docs.map(d => ({ id: d.id, ...(d.data() as any) })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
 
       const snapUtenti = await getDocs(collection(db, 'users'));
       setUtentiLista(snapUtenti.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -1765,7 +2087,14 @@ export default function App() {
         }
         snapSezioni = await getDocs(collection(db, 'sezioni'));
       }
-      setSezioniLista(snapSezioni.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+      let sezioniArr = snapSezioni.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      if (!sezioniArr.some((s: any) => s.speciale === 'aulaStudio')) {
+        const ordineMax = sezioniArr.reduce((max: number, s: any) => Math.max(max, s.ordine ?? 0), -1);
+        await addDoc(collection(db, 'sezioni'), { nome: 'Aula Studio', nomeAr: 'قاعة الدراسة', ordine: ordineMax + 1, speciale: 'aulaStudio' });
+        const snapSezioni2 = await getDocs(collection(db, 'sezioni'));
+        sezioniArr = snapSezioni2.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      }
+      setSezioniLista(sezioniArr.sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
 
       const snapManutenzione = await getDocs(collection(db, 'manutenzione'));
       setManutenzioneLista(snapManutenzione.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -1773,7 +2102,7 @@ export default function App() {
       if (user) {
         const snapNotifiche = await getDocs(collection(db, 'notifiche'));
         const mieNotifiche = snapNotifiche.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map(d => ({ id: d.id, ...(d.data() as any) }))
           .filter(n => n.utenteId === user.uid)
           .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         setNotificheLista(mieNotifiche);
@@ -1850,6 +2179,11 @@ export default function App() {
           } else {
             setProfiloDaCompletare(false);
           }
+          setNecessitaDatiAulaStudio(datiUtente.role === 'studente' && !datiUtente.aulaStudioProfiloCompletato);
+          try {
+            const snapClassiPrecoce = await getDocs(collection(db, 'classi'));
+            setClassiLista(snapClassiPrecoce.docs.map(d => ({ id: d.id, ...(d.data() as any) })).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+          } catch (e) {}
         }
         setUser(firebaseUser);
       } catch (e) {
@@ -2456,7 +2790,7 @@ export default function App() {
       return;
     }
 
-    const giorni = [];
+    const giorni: string[] = [];
     let corrente = new Date(dataInizioBloccoObj);
     const fine = new Date(dataFineBlocco + 'T00:00:00');
     let sicurezza = 0;
@@ -2691,10 +3025,23 @@ export default function App() {
   const eliminaUtenteDallaLista = (u) => {
     const esegui = async () => {
       try {
-        await deleteDoc(doc(db, 'users', u.id));
+        // MODIFICATO: prima si cancellava solo la scheda Firestore, lasciando
+        // attivo l'accesso su Firebase Authentication. Ora si chiama la
+        // funzione serverless (Vercel) che, con l'Admin SDK, cancella
+        // DAVVERO anche l'account di accesso.
+        const idToken = await auth.currentUser.getIdToken();
+        const risposta = await fetch(DELETE_USER_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ targetUid: u.id }),
+        });
+        const risultato = await risposta.json().catch(() => ({}));
+        if (!risposta.ok) {
+          throw new Error(risultato.error || 'Eliminazione non riuscita');
+        }
         await registraAttivita(
           TIPI_REGISTRO.ELIMINAZIONE_UTENTE,
-          `Utente ${u.nome} rimosso dalla lista`
+          `Utente ${u.nome} eliminato definitivamente (account + lista)`
         );
         caricaDatiGenerali();
         mostraAlert('', t('utenteRimossoDallaLista', lang));
@@ -2736,14 +3083,15 @@ export default function App() {
   const aggiungiClasse = async () => {
     if (!nuovaClasseNome.trim()) return;
     if (classeInModifica) {
-      await updateDoc(doc(db, 'classi', classeInModifica.id), { nome: nuovaClasseNome.trim() });
+      await updateDoc(doc(db, 'classi', classeInModifica.id), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo });
       await registraAttivita(TIPI_REGISTRO.MODIFICA_CLASSE, `Classe ${classeInModifica.nome} rinominata in ${nuovaClasseNome.trim()}`);
       setClasseInModifica(null);
     } else {
-      await addDoc(collection(db, 'classi'), { nome: nuovaClasseNome.trim(), ordine: classiLista.length });
+      await addDoc(collection(db, 'classi'), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo, ordine: classiLista.length });
       await registraAttivita(TIPI_REGISTRO.AGGIUNTA_CLASSE, `Classe ${nuovaClasseNome.trim()} aggiunta`);
     }
     setNuovaClasseNome('');
+    setNuovaClasseTipo('medie');
     setMostraFormAggiungiClasse(false);
     caricaDatiGenerali();
   };
@@ -2751,12 +3099,14 @@ export default function App() {
   const avviaModificaClasse = (classeItem) => {
     setClasseInModifica(classeItem);
     setNuovaClasseNome(classeItem.nome);
+    setNuovaClasseTipo(classeItem.tipo === 'ipi' ? 'ipi' : 'medie');
     setMostraFormAggiungiClasse(true);
   };
 
   const annullaModificaClasse = () => {
     setClasseInModifica(null);
     setNuovaClasseNome('');
+    setNuovaClasseTipo('medie');
     setMostraFormAggiungiClasse(false);
   };
 
@@ -2776,10 +3126,29 @@ export default function App() {
     }
   };
 
+  // Classifica in blocco tutte le classi ancora "Da classificare" col tipo scelto (Medie/IPI)
+  const classificaClassiNonAssegnate = async (tipoScelto) => {
+    const classiDaClassificare = classiLista.filter((c) => c.tipo !== 'medie' && c.tipo !== 'ipi');
+    if (classiDaClassificare.length === 0) return;
+    const esegui = async () => {
+      for (const c of classiDaClassificare) {
+        await updateDoc(doc(db, 'classi', c.id), { tipo: tipoScelto });
+      }
+      await registraAttivita(TIPI_REGISTRO.MODIFICA_CLASSE, `${classiDaClassificare.length} classi classificate come ${tipoScelto === 'ipi' ? 'IPI' : 'Medie'}`);
+      caricaDatiGenerali();
+    };
+    const messaggioConferma = t('confermaClassificaClassiBulk', lang, classiDaClassificare.length, tipoScelto === 'ipi' ? 'IPI' : 'Medie');
+    if (Platform.OS === 'web') {
+      if (window.confirm(messaggioConferma)) esegui();
+    } else {
+      Alert.alert(t('conferma', lang), messaggioConferma, [{ text: t('annulla', lang) }, { text: t('conferma', lang), onPress: esegui }]);
+    }
+  };
+
    const eseguiResetPrenotazioni = async () => {
     const effettuaReset = async () => {
       try {
-        let prenotazioniDaEliminare = [];
+        let prenotazioniDaEliminare: any[] = [];
         if (resetModalita === 'mensile') {
           prenotazioniDaEliminare = prenotazioni.filter((p) => p.data && p.data.startsWith(resetMeseSelezionato));
         } else {
@@ -2938,7 +3307,7 @@ export default function App() {
   };
 
   const cambiaStatoManutenzione = async (id, nuovoStato, segnalazioneCorrente) => {
-    const aggiornamento = { stato: nuovoStato };
+    const aggiornamento: any = { stato: nuovoStato };
     const ora = new Date().toISOString();
     if (nuovoStato === 'In lavorazione' && !segnalazioneCorrente?.tsPresaInCarico) {
       aggiornamento.tsPresaInCarico = ora;
@@ -3170,7 +3539,7 @@ export default function App() {
         .sort((a, b) => (a.data || '').localeCompare(b.data || ''))
         .map((s) => {
           const diarioTesto = (s.diario || [])
-            .map((v) => `${v.autore} (${formattaDataOra(v.timestamp)}): ${v.testo}`)
+            .map((v) => `${v.autore} (${formattaDataOra(v.timestamp, lang)}): ${v.testo}`)
             .join(' | ');
           return {
             [t('aula', lang)]: s.aulaNome || '',
@@ -3180,9 +3549,9 @@ export default function App() {
             [t('colSegnalatoDa', lang)]: s.utenteNome || '',
             [t('email', lang)]: s.utenteEmail || '',
             [t('stato', lang)]: s.stato || '',
-            [t('colDataSegnalazione', lang)]: formattaDataOra(s.tsSegnalazione) || s.data || '',
-            [t('colDataPresaInCarico', lang)]: s.tsPresaInCarico ? formattaDataOra(s.tsPresaInCarico) : t('nonAncora', lang),
-            [t('colDataRisoluzione', lang)]: s.tsRisoluzione ? formattaDataOra(s.tsRisoluzione) : t('nonAncora', lang),
+            [t('colDataSegnalazione', lang)]: formattaDataOra(s.tsSegnalazione, lang) || s.data || '',
+            [t('colDataPresaInCarico', lang)]: s.tsPresaInCarico ? formattaDataOra(s.tsPresaInCarico, lang) : t('nonAncora', lang),
+            [t('colDataRisoluzione', lang)]: s.tsRisoluzione ? formattaDataOra(s.tsRisoluzione, lang) : t('nonAncora', lang),
             [t('diarioLavoro', lang)]: diarioTesto
           };
         });
@@ -3308,7 +3677,7 @@ export default function App() {
 
       setUtentePermessiTarget(null);
       caricaDatiGenerali();
-      mostraAlert('', 'Permessi aggiornati con successo.');
+      mostraAlert('', lang === 'ar' ? 'تم تحديث الصلاحيات بنجاح.' : 'Permessi aggiornati con successo.');
     } catch (e) {
       console.error('Errore salvataggio permessi:', e);
       mostraAlert(t('errore', lang), e.message);
@@ -3359,6 +3728,47 @@ export default function App() {
   const canGestireClassi = haPermesso(currentUserData, 'puoGestireClassi', puoGestireClassi);
   const canCreareRuoliPersonalizzati = haPermesso(currentUserData, 'puoCreareRuoliPersonalizzati', puoCreareRuoliPersonalizzati);
   const canAssegnarePermessiRuoliPersonalizzati = haPermesso(currentUserData, 'puoAssegnarePermessiRuoliPersonalizzati', puoAssegnarePermessiRuoliPersonalizzati);
+  const canGestireAulaStudio = haPermesso(currentUserData, 'puoGestireAulaStudio', puoGestireAulaStudio);
+  // Se l'utente entra in Impostazioni → Esporta ma può esportare solo l'Aula Studio (es. segreteria
+  // senza gli altri permessi di export), sposta automaticamente la scheda selezionata su "Aula Studio".
+  useEffect(() => {
+    if (impostazioniVista !== 'esporta') return;
+    const puoEsportarePrenotazioniOUtenti = canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni;
+    if (esportaTipoSelezionato !== 'aulaStudio' && !puoEsportarePrenotazioniOUtenti && canGestireAulaStudio) {
+      setEsportaTipoSelezionato('aulaStudio');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [impostazioniVista, canEsportareUtentiPrenotazioni, canEsportarePrenotazioniSegnalazioni, canGestireAulaStudio]);
+  // Profilo Aula Studio dello studente loggato (tipo scuola, classe, numero di registro, nome/cognome),
+  // compilato una sola volta dal wizard di primo accesso e riusato per tutte le prenotazioni.
+  const profiloAulaStudio = currentUserData?.aulaStudioProfiloCompletato
+    ? {
+        tipoScuola: currentUserData.aulaStudioTipoScuola,
+        classe: currentUserData.aulaStudioClasse,
+        numeroRegistro: currentUserData.aulaStudioNumeroRegistro,
+        nomeStudente: currentUserData.aulaStudioNomeStudente,
+        cognomeStudente: currentUserData.aulaStudioCognomeStudente,
+      }
+    : null;
+
+  // Utenti che possono gestire l'Aula Studio (rispettando eventuali override permessi), usato per
+  // notificare le nuove richieste di turno degli insegnanti.
+  const gestoriAulaStudio = useMemo(
+    () =>
+      utentiLista
+        .filter((u) => haPermesso(u, 'puoGestireAulaStudio', puoGestireAulaStudio))
+        .map((u) => ({ uid: u.id, nome: u.nome })),
+    [utentiLista]
+  );
+
+  // Insegnanti, usati dal responsabile Aula Studio per assegnare direttamente un turno.
+  const insegnantiAulaStudio = useMemo(
+    () =>
+      utentiLista
+        .filter((u) => u.role === 'insegnante')
+        .map((u) => ({ uid: u.id, nome: u.nome, email: u.email || null })),
+    [utentiLista]
+  );
 
   // Filtri profili per la sezione "Profili" (spostato qui: gli Hook non possono essere
   // chiamati condizionalmente né dentro funzioni annidate nel JSX)
@@ -3460,7 +3870,7 @@ export default function App() {
                     <View style={qrStyles.box}>
                       {!showQrCode ? (
                         <>
-                          <Text style={qrStyles.title}>Scarica su:</Text>
+                          <Text style={qrStyles.title}>{lang === 'ar' ? 'تحميل على:' : 'Scarica su:'}</Text>
                           <TouchableOpacity
                             style={qrStyles.choiceBtn}
                             onPress={() => {
@@ -3480,22 +3890,22 @@ export default function App() {
                             style={qrStyles.closeBtn}
                             onPress={() => setShowDownloadChoice(false)}
                           >
-                            <Text style={qrStyles.closeBtnText}>Annulla</Text>
+                            <Text style={qrStyles.closeBtnText}>{t('annulla', lang)}</Text>
                           </TouchableOpacity>
                         </>
                       ) : (
                         <>
-                          <Text style={qrStyles.title}>Scansiona con il telefono Android</Text>
+                          <Text style={qrStyles.title}>{lang === 'ar' ? 'امسح الرمز بهاتف الأندرويد' : 'Scansiona con il telefono Android'}</Text>
                           <Image
                             source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(APK_DOWNLOAD_URL)}` }}
                             style={qrStyles.qrImage}
                           />
-                          <Text style={qrStyles.hint}>Il QR è sempre valido, anche dopo gli aggiornamenti dell'app.</Text>
+                          <Text style={qrStyles.hint}>{lang === 'ar' ? 'رمز QR صالح دائمًا، حتى بعد تحديثات التطبيق.' : "Il QR è sempre valido, anche dopo gli aggiornamenti dell'app."}</Text>
                           <TouchableOpacity
                             style={qrStyles.closeBtn}
                             onPress={() => { setShowDownloadChoice(false); setShowQrCode(false); }}
                           >
-                            <Text style={qrStyles.closeBtnText}>Chiudi</Text>
+                            <Text style={qrStyles.closeBtnText}>{t('chiudiLabel', lang)}</Text>
                           </TouchableOpacity>
                         </>
                       )}
@@ -3578,7 +3988,12 @@ export default function App() {
   }
 
   // 5. Schermata "Completa profilo" (dopo verifica email, prima dell'app)
-  if (user && !emailNonVerificata && profiloDaCompletare) {
+  if (user && !emailNonVerificata && (profiloDaCompletare || necessitaDatiAulaStudio)) {
+    // MODIFICATO: due varianti della stessa schermata.
+    // - profiloDaCompletare (nuovo account): tipo utente + (se studente) anno/classe/dati Aula Studio + data nascita.
+    // - solo necessitaDatiAulaStudio (studente già registrato prima di questa funzione): SOLO i 3 campi Aula Studio, una tantum.
+    const soloDatiAulaStudio = !profiloDaCompletare && necessitaDatiAulaStudio;
+    const classiFiltratePerTipoScuola = classiLista.filter((c) => c.tipo === aulaStudioTipoScuolaScelto);
     return (
       <SafeAreaView style={[styles.container, isRTL && { direction: 'rtl' }]}>
         <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
@@ -3609,25 +4024,27 @@ export default function App() {
             keyboardShouldPersistTaps="handled"
           >
             <AppLogo style={Platform.OS === 'web' ? { width: 200, height: 70, alignSelf: 'center' } : { width: '65%', maxWidth: 200, aspectRatio: 200 / 70, alignSelf: 'center' }} />
-            <Text style={[styles.appName, { marginBottom: 8 }]}>{t('completaProfilo', lang)}</Text>
-            <Text style={[styles.infoText, { marginBottom: 16 }]}>{t('scegliTipo', lang)}</Text>
+            <Text style={[styles.appName, { marginBottom: 8 }]}>{soloDatiAulaStudio ? t('aulaStudioRegistrazioneTitolo', lang) : t('completaProfilo', lang)}</Text>
+            <Text style={[styles.infoText, { marginBottom: 16 }]}>{soloDatiAulaStudio ? t('aulaStudioRegistrazioneSottotitolo', lang) : t('scegliTipo', lang)}</Text>
 
-            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-              <TouchableOpacity
-                style={[styles.fasciaChip, tipoUtenteScelto === 'studente' && styles.fasciaSelected]}
-                onPress={() => { setTipoUtenteScelto('studente'); setAnnoScolasticoScelto(annoScolasticoAttuale()); setClasseScelta(''); }}
-              >
-                <Text style={[styles.fasciaText, tipoUtenteScelto === 'studente' && styles.fasciaTextSelected]}>{t('studente', lang)}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.fasciaChip, tipoUtenteScelto === 'insegnante' && styles.fasciaSelected]}
-                onPress={() => { setTipoUtenteScelto('insegnante'); setAnnoScolasticoScelto(''); setClasseScelta(''); }}
-              >
-                <Text style={[styles.fasciaText, tipoUtenteScelto === 'insegnante' && styles.fasciaTextSelected]}>{t('insegnante', lang)}</Text>
-              </TouchableOpacity>
-            </View>
+            {!soloDatiAulaStudio && (
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                <TouchableOpacity
+                  style={[styles.fasciaChip, tipoUtenteScelto === 'studente' && styles.fasciaSelected]}
+                  onPress={() => { setTipoUtenteScelto('studente'); setAnnoScolasticoScelto(annoScolasticoAttuale()); setClasseScelta(''); setAulaStudioTipoScuolaScelto(null); }}
+                >
+                  <Text style={[styles.fasciaText, tipoUtenteScelto === 'studente' && styles.fasciaTextSelected]}>{t('studente', lang)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.fasciaChip, tipoUtenteScelto === 'insegnante' && styles.fasciaSelected]}
+                  onPress={() => { setTipoUtenteScelto('insegnante'); setAnnoScolasticoScelto(''); setClasseScelta(''); setAulaStudioTipoScuolaScelto(null); }}
+                >
+                  <Text style={[styles.fasciaText, tipoUtenteScelto === 'insegnante' && styles.fasciaTextSelected]}>{t('insegnante', lang)}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-            {tipoUtenteScelto === 'studente' && (
+            {!soloDatiAulaStudio && tipoUtenteScelto === 'studente' && (
               <>
                 <Text style={[styles.label, { marginTop: 4 }]}>{t('annoScolastico', lang)}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -3638,47 +4055,94 @@ export default function App() {
                     <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('generaAnnoScolastico', lang)}</Text>
                   </TouchableOpacity>
                 </View>
-
-                <Text style={styles.label}>{t('classe', lang)}</Text>
-                <TouchableOpacity style={[styles.datePickerButton, { marginBottom: 12 }]} onPress={() => setModalScegliClasseRegistrazione(true)}>
-                  <Text style={styles.datePickerButtonText}>{classeScelta || t('classe', lang)}</Text>
-                </TouchableOpacity>
               </>
             )}
 
-            <Text style={styles.label}>{t('dataNascita', lang)}</Text>
-            {Platform.OS === 'web' ? (
-              <input
-                type="date"
-                value={dataNascitaScelta}
-                max={new Date().toISOString().split('T')[0]}
-                onChange={(e) => { setDataNascitaScelta(e.target.value); }}
-                style={webDateInputStyle}
-              />
-            ) : (
+            {(soloDatiAulaStudio || tipoUtenteScelto === 'studente') && (
               <>
-                <TouchableOpacity style={styles.datePickerButton} onPress={() => setShowDatePickerNascita(true)}>
-                  <Text style={styles.datePickerButtonText}>{dataNascitaScelta ? dataNascitaScelta : 'Seleziona data'}</Text>
+                {/* MODIFICATO: dati Aula Studio (tipo scuola, classe filtrata, numero di registro) — chiesti qui, una sola volta, non più dentro la sezione Aula Studio. */}
+                <Text style={styles.label}>{t('aulaStudioSceglieTipoScuola', lang)}</Text>
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+                  <TouchableOpacity
+                    style={[styles.fasciaChip, { flex: 1 }, aulaStudioTipoScuolaScelto === 'medie' && styles.fasciaSelected]}
+                    onPress={() => { setAulaStudioTipoScuolaScelto('medie'); setClasseScelta(''); }}
+                  >
+                    <Text style={[styles.fasciaText, aulaStudioTipoScuolaScelto === 'medie' && styles.fasciaTextSelected]}>{t('aulaStudioTipoMedie', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.fasciaChip, { flex: 1 }, aulaStudioTipoScuolaScelto === 'ipi' && styles.fasciaSelected]}
+                    onPress={() => { setAulaStudioTipoScuolaScelto('ipi'); setClasseScelta(''); }}
+                  >
+                    <Text style={[styles.fasciaText, aulaStudioTipoScuolaScelto === 'ipi' && styles.fasciaTextSelected]}>{t('aulaStudioTipoIpi', lang)}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.label}>{t('classe', lang)}</Text>
+                <TouchableOpacity
+                  style={[styles.datePickerButton, { marginBottom: 12 }, !aulaStudioTipoScuolaScelto && { opacity: 0.5 }]}
+                  disabled={!aulaStudioTipoScuolaScelto}
+                  onPress={() => setModalScegliClasseRegistrazione(true)}
+                >
+                  <Text style={styles.datePickerButtonText}>{classeScelta || t('aulaStudioSceglieClasse', lang)}</Text>
                 </TouchableOpacity>
-                {showDatePickerNascita && (
-                  <DateTimePicker
-                    value={dataNascitaObj}
-                    mode="date"
-                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                    maximumDate={new Date()}
-                    onChange={onChangeDateNascita}
+
+                <Text style={styles.label}>{t('aulaStudioNumeroInClasse', lang)}</Text>
+                <TextInput
+                  style={[styles.input, { marginBottom: 12 }]}
+                  value={aulaStudioNumeroRegistroScelto}
+                  onChangeText={setAulaStudioNumeroRegistroScelto}
+                  placeholder="12"
+                  placeholderTextColor={colors.placeholder}
+                  keyboardType="number-pad"
+                />
+              </>
+            )}
+
+            {!soloDatiAulaStudio && (
+              <>
+                <Text style={styles.label}>{t('dataNascita', lang)}</Text>
+                {Platform.OS === 'web' ? (
+                  <input
+                    type="date"
+                    value={dataNascitaScelta}
+                    max={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => { setDataNascitaScelta(e.target.value); }}
+                    style={webDateInputStyle}
                   />
+                ) : (
+                  <>
+                    <TouchableOpacity style={styles.datePickerButton} onPress={() => setShowDatePickerNascita(true)}>
+                      <Text style={styles.datePickerButtonText}>{dataNascitaScelta ? dataNascitaScelta : 'Seleziona data'}</Text>
+                    </TouchableOpacity>
+                    {showDatePickerNascita && (
+                      <DateTimePicker
+                        value={dataNascitaObj}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                        maximumDate={new Date()}
+                        onChange={onChangeDateNascita}
+                      />
+                    )}
+                  </>
+                )}
+                {!!dataNascitaScelta && (
+                  <Text style={[styles.infoTextSmall, { marginTop: 4 }]}>
+                    {t('eta', lang)}: {calcolaEta(dataNascitaScelta)} {lang === 'ar' ? 'سنة' : 'anni'}
+                  </Text>
                 )}
               </>
             )}
-            {!!dataNascitaScelta && (
-              <Text style={[styles.infoTextSmall, { marginTop: 4 }]}>
-                {t('eta', lang)}: {calcolaEta(dataNascitaScelta)} {lang === 'ar' ? 'سنة' : 'anni'}
-              </Text>
-            )}
 
-            <TouchableOpacity style={[styles.primaryButton, { marginTop: 20 }]} onPress={completaProfilo}>
-              <Text style={styles.buttonText}>{t('conferma', lang)}</Text>
+            <TouchableOpacity
+              style={[styles.primaryButton, { marginTop: 20 }, salvandoDatiAulaStudio && { opacity: 0.6 }]}
+              onPress={soloDatiAulaStudio ? completaDatiAulaStudioEsistente : completaProfilo}
+              disabled={salvandoDatiAulaStudio}
+            >
+              {salvandoDatiAulaStudio ? (
+                <ActivityIndicator color={colors.primaryText || '#fff'} />
+              ) : (
+                <Text style={styles.buttonText}>{t('conferma', lang)}</Text>
+              )}
             </TouchableOpacity>
             <TouchableOpacity onPress={handleLogout} style={{ marginTop: 12 }}>
               <Text style={styles.switchAuthText}>{t('esci', lang)}</Text>
@@ -3687,20 +4151,30 @@ export default function App() {
           </KeyboardAvoidingView>
         </View>
 
-        {/* Modale Scegli Classe (registrazione / completamento profilo) */}
+        {/* Modale Scegli Classe (registrazione / completamento profilo / dati Aula Studio) */}
         <Modal visible={modalScegliClasseRegistrazione} animationType="fade" transparent onRequestClose={() => setModalScegliClasseRegistrazione(false)}>
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModalScegliClasseRegistrazione(false)}>
             <View style={[styles.dropdownOptionsList, { maxHeight: '75%' }]}>
               <Text style={[styles.label, { textAlign: 'center', marginBottom: 8 }]}>{t('classe', lang)}</Text>
               <ScrollView>
-                {(classiLista.length > 0 ? classiLista.map(c => c.nome) : CLASSI_DISPONIBILI).map((cls) => {
-                  const attivo = classeScelta === cls;
-                  return (
-                    <TouchableOpacity key={cls} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setClasseScelta(cls); setModalScegliClasseRegistrazione(false); }}>
-                      <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{cls}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                {((soloDatiAulaStudio || tipoUtenteScelto === 'studente')
+                  ? classiFiltratePerTipoScuola.map((c) => c.nome)
+                  : (classiLista.length > 0 ? classiLista.map(c => c.nome) : CLASSI_DISPONIBILI)
+                ).length === 0 ? (
+                  <Text style={[styles.infoText, { textAlign: 'center', padding: 8 }]}>{t('aulaStudioNessunaClasseDisponibile', lang)}</Text>
+                ) : (
+                  ((soloDatiAulaStudio || tipoUtenteScelto === 'studente')
+                    ? classiFiltratePerTipoScuola.map((c) => c.nome)
+                    : (classiLista.length > 0 ? classiLista.map(c => c.nome) : CLASSI_DISPONIBILI)
+                  ).map((cls) => {
+                    const attivo = classeScelta === cls;
+                    return (
+                      <TouchableOpacity key={cls} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setClasseScelta(cls); setModalScegliClasseRegistrazione(false); }}>
+                        <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{cls}</Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
               </ScrollView>
             </View>
           </TouchableOpacity>
@@ -3720,7 +4194,7 @@ export default function App() {
       {/* ==========================================================
           HEADER (con nome cliccabile per profilo personale)
           ========================================================== */}
-      <View style={[styles.header, isRTL && { flexDirection: 'row-reverse' }]}>
+      <View style={styles.header}>
         <View style={[styles.headerSideGroup, { justifyContent: isRTL ? 'flex-end' : 'flex-start' }]}>
           <TouchableOpacity onPress={() => setModalProfiloPersonale(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <View style={{ alignItems: isRTL ? 'flex-end' : 'flex-start' }}>
@@ -3755,7 +4229,7 @@ export default function App() {
               <Text style={styles.langTextHeader}>🔔</Text>
               {notificheNonLette > 0 && (
                 <View style={styles.notificaBadge}>
-                  <Text style={styles.notificaBadgeText}>{notificheNonLette > 9 ? '9+' : notificheNonLette}</Text>
+                  <Text style={styles.notificaBadgeText}>{notificheNonLette > 9 ? `${numArabo(9, lang)}+` : numArabo(notificheNonLette, lang)}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -3786,14 +4260,21 @@ export default function App() {
                 <TouchableOpacity
                   key={n.id}
                   style={[styles.diarioVoce, n.letta ? styles.diarioVoceLetta : styles.diarioVoceNonLetta]}
-                  onPress={() => !n.letta && segnaNotificaComeLetta(n.id)}
+                  onPress={() => {
+                    if (!n.letta) segnaNotificaComeLetta(n.id);
+                    if (n.richiestaTurnoId) {
+                      setModalNotifiche(false);
+                      setVistaAttiva('aulaStudio');
+                      setRichiestaTurnoDaAprireId(n.richiestaTurnoId);
+                    }
+                  }}
                 >
                   <View style={styles.diarioVoceHeader}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
                       {!n.letta && <View style={styles.diarioPallino} />}
                       <Text style={[styles.diarioAutore, n.letta && styles.diarioAutoreLetta]}>{n.titolo}</Text>
                     </View>
-                    <Text style={styles.diarioTimestamp}>{formattaDataOra(n.createdAt)}</Text>
+                    <Text style={styles.diarioTimestamp}>{formattaDataOra(n.createdAt, lang)}</Text>
                   </View>
                   <Text style={styles.diarioTesto}>{n.corpo}</Text>
                   <TouchableOpacity
@@ -3822,7 +4303,7 @@ export default function App() {
           ========================================================== */}
       {Platform.OS !== 'android' && (
         <View style={styles.navBar}>
-          <TouchableOpacity onPress={() => { setVistaAttiva('home'); setSezioneSelezionata(null); setModalitaModificaAule(false); }}>
+          <TouchableOpacity onPress={() => { setVistaAttiva('home'); setSezioneSelezionata(null); }}>
             <Text style={[styles.navItem, vistaAttiva === 'home' && styles.navActive]}>{t('navHome', lang)}</Text>
           </TouchableOpacity>
           {!canApprovarePrenotazioni && (
@@ -3838,6 +4319,7 @@ export default function App() {
           <TouchableOpacity onPress={() => setVistaAttiva('manutenzione')}>
             <Text style={[styles.navItem, vistaAttiva === 'manutenzione' && styles.navActive]}>{t('navManutenzione', lang)}</Text>
           </TouchableOpacity>
+          {/* "Aula Studio" è stata spostata come voce nella Home: vedi styles.cardGrid in VISTA HOME. */}
           <TouchableOpacity onPress={() => setVistaAttiva('impostazioni')}>
             <Text style={[styles.navItem, vistaAttiva === 'impostazioni' && styles.navActive]}>{t('navImpostazioni', lang)}</Text>
           </TouchableOpacity>
@@ -3851,57 +4333,37 @@ export default function App() {
       <View style={{ flex: 1 }}>
         <Image
           source={LOGO_WATERMARK}
-          style={[styles.contentWatermark, { width: watermarkSize, height: watermarkSize, right: watermarkOffset, bottom: watermarkOffsetY }]}
-          pointerEvents="none"
+          style={[styles.contentWatermark, { width: watermarkSize, height: watermarkSize, right: watermarkOffset, bottom: watermarkOffsetY, pointerEvents: 'none' }] as any}
           resizeMode="contain"
         />
 
         {/* ------ VISTA HOME (sezioni) ------ */}
         {vistaAttiva === 'home' && !sezioneSelezionata && (
           <ScrollView contentContainerStyle={styles.bodyContent}>
-            {canGestireAule && (
-              <View style={{ flexDirection: 'row', justifyContent: isRTL ? 'flex-start' : 'flex-end', marginBottom: 12 }}>
-                <TouchableOpacity
-                  style={[
-                    styles.editToggleBtn,
-                    { backgroundColor: modalitaModificaSezioni ? colors.success : colors.primary }
-                  ]}
-                  onPress={() => setModalitaModificaSezioni(!modalitaModificaSezioni)}
-                >
-                  <Text style={styles.editToggleBtnText}>{modalitaModificaSezioni ? `✓ ${t('fine', lang)}` : `✎ ${t('modifica', lang)}`}</Text>
-                </TouchableOpacity>
-              </View>
-            )}
             <View style={styles.cardGrid}>
-              {sezioniLista.map((sez, idx) => (
-                <View key={sez.id} style={[styles.cleanCardRow, isRTL && { flexDirection: 'row-reverse' }]}>
-                  <TouchableOpacity style={styles.cleanCard} onPress={() => { setSezioneSelezionata(sez.nome); setVistaAttiva('aule'); setModalitaModificaAule(false); }}>
-                    <Text style={styles.cleanCardText}>{risolviNomeSezione(sez.nome, lang)}</Text>
-                  </TouchableOpacity>
-                  {canGestireAule && modalitaModificaSezioni && (
-                    <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaSezione(idx, 'su')} disabled={idx === 0}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▲</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaSezione(idx, 'giu')} disabled={idx === sezioniLista.length - 1}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▼</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaSezione(sez)}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaSezione(sez.id)}>
-                        <Text style={styles.btnText}>{t('elimina', lang)}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-              ))}
+              {sezioniLista.map((sez) => {
+                const isAulaStudio = sez.speciale === 'aulaStudio';
+                return (
+                  <View key={sez.id} style={styles.cleanCardRow}>
+                    <TouchableOpacity
+                      style={styles.cleanCard}
+                      onPress={() => {
+                        if (isAulaStudio) {
+                          setVistaAttiva('aulaStudio');
+                        } else {
+                          setSezioneSelezionata(sez.nome);
+                          setVistaAttiva('aule');
+                        }
+                      }}
+                    >
+                      <Text style={styles.cleanCardText}>{risolviNomeSezione(sez.nome, lang)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
             </View>
-            {canGestireAule && modalitaModificaSezioni && (
-              <TouchableOpacity style={[styles.addButton, { alignSelf: isRTL ? 'flex-end' : 'flex-start' }]} onPress={() => setModalNuovaSezione(true)}>
-                <Text style={styles.addButtonText}>{t('aggiungiSezione', lang)}</Text>
-              </TouchableOpacity>
-            )}
+            {/* La gestione di sezioni/aule (aggiungi, rinomina, riordina, elimina) si trova ora in
+                Impostazioni → Aule: qui la Home resta di sola navigazione. */}
           </ScrollView>
         )}
 
@@ -3911,56 +4373,19 @@ export default function App() {
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionHeaderTitle}>{risolviNomeSezione(sezioneSelezionata, lang)}</Text>
             </View>
-            {canGestireAule && (
-              <View style={{ flexDirection: 'row', justifyContent: isRTL ? 'flex-start' : 'flex-end', marginBottom: 12 }}>
-                <TouchableOpacity
-                  style={[
-                    styles.editToggleBtn,
-                    { backgroundColor: modalitaModificaAule ? colors.success : colors.primary }
-                  ]}
-                  onPress={() => setModalitaModificaAule(!modalitaModificaAule)}
-                >
-                  <Text style={styles.editToggleBtnText}>{modalitaModificaAule ? `✓ ${t('fine', lang)}` : `✎ ${t('modifica', lang)}`}</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {aule.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)).map((aula, idx, arr) => (
+            {aule.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)).map((aula) => (
               <View key={aula.id} style={styles.aulaCard}>
                 <View>
                   <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
-                  <Text style={styles.aulaDesc}>{t('capienza', lang)}: {aula.capienza}</Text>
+                  <Text style={styles.aulaDesc}>{t('capienza', lang)}: {numArabo(aula.capienza, lang)}</Text>
                 </View>
                 <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {canGestireAule && modalitaModificaAule && (
-                    <>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaAula(aula.id, 'su')} disabled={idx === 0}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▲</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaAula(aula.id, 'giu')} disabled={idx === arr.length - 1}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▼</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaAula(aula)}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaAula(aula.id)}>
-                        <Text style={styles.btnText}>{t('elimina', lang)}</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
                   <TouchableOpacity style={styles.primaryButtonSmall} onPress={() => setAulaInPrenotazione(aula)}>
                     <Text style={styles.buttonTextSmall}>{t('prenota', lang)}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
             ))}
-            {canGestireAule && modalitaModificaAule && (
-              <TouchableOpacity style={[styles.addButton, { alignSelf: isRTL ? 'flex-end' : 'flex-start', marginTop: 4 }]} onPress={apriNuovaAula}>
-                <Text style={styles.addButtonText}>{t('aggiungiAula', lang)}</Text>
-              </TouchableOpacity>
-            )}
           </ScrollView>
         )}
 
@@ -3968,7 +4393,7 @@ export default function App() {
         {vistaAttiva === 'calendario' && (() => {
           const prenotazioniValide = prenotazioni.filter((p) => p.stato !== 'Rifiutata');
           const meseCorrenteStr = oggiStr.substring(0, 7);
-          const mesiDisponibili = [];
+          const mesiDisponibili: string[] = [];
           for (let i = 0; i <= MESI_MASSIMI_PRENOTAZIONE; i++) {
             const d = new Date();
             d.setDate(1);
@@ -4030,7 +4455,7 @@ export default function App() {
                       ]}
                       onPress={() => setGiornoCalendarioSelezionato(giornoStr)}
                     >
-                      <Text style={[styles.dayButtonText, passato && styles.dayButtonTextPast]}>{giorno}</Text>
+                      <Text style={[styles.dayButtonText, passato && styles.dayButtonTextPast]}>{numArabo(giorno, lang)}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -4040,7 +4465,7 @@ export default function App() {
                 <View style={styles.modalOverlay}>
                   <View style={styles.modalContentFixed}>
                     <View style={styles.modalHeaderFixed}>
-                      <Text style={styles.modalTitle}>{giornoCalendarioSelezionato}</Text>
+                      <Text style={styles.modalTitle}>{dataArabo(giornoCalendarioSelezionato, lang)}</Text>
                       <TouchableOpacity onPress={() => setGiornoCalendarioSelezionato(null)}><Text style={styles.closeText}>✕</Text></TouchableOpacity>
                     </View>
                     <ScrollView style={styles.modalBodyScrollable}>
@@ -4053,7 +4478,7 @@ export default function App() {
                           <View key={p.id} style={styles.calRow}>
                             <Text style={styles.calRowText} numberOfLines={2} ellipsizeMode="tail">
                               <Text style={styles.calRowAula}>{risolviNomeAula(p.aulaNome, lang)}</Text>
-                              {'  '}({risolviNomeSezione(p.sezione, lang)}) · {p.fasce.join(', ')} —{' '}
+                              {'  '}({risolviNomeSezione(p.sezione, lang)}) · {numArabo(p.fasce.join(', '), lang)} —{' '}
                               <Text style={isMia ? styles.calRowMia : styles.calRowOccupata}>
                                 {isMia ? t('tua', lang, p.stato === 'In attesa' ? t('inAttesa', lang) : p.stato === 'Approvata' ? t('approvata', lang) : p.stato === 'Rifiutata' ? t('rifiutata', lang) : p.stato) : t('occupata', lang)}
                               </Text>
@@ -4073,6 +4498,80 @@ export default function App() {
             </ScrollView>
           );
         })()}
+
+        {/* ------ VISTA AULA STUDIO ------ */}
+        {vistaAttiva === 'aulaStudio' && (
+          canGestireAulaStudio ? (
+            <AulaStudioResponsabileView
+              db={db}
+              user={user}
+              userName={userName}
+              userRole={userRole}
+              lang={lang as any}
+              isRTL={isRTL}
+              colors={colors as any}
+              t={t}
+              mostraAlert={mostraAlert}
+              canGestireAulaStudio={canGestireAulaStudio}
+              registraAttivita={registraAttivita}
+              inviaNotificaConPreferenza={inviaNotificaConPreferenza}
+              scriviECondividiExcel={scriviECondividiExcel}
+              classiLista={classiLista}
+              profiloAulaStudio={profiloAulaStudio}
+              onProfiloAulaStudioSalvato={caricaDatiGenerali}
+              gestoriAulaStudio={gestoriAulaStudio}
+              richiestaTurnoDaAprireId={richiestaTurnoDaAprireId}
+              onRichiestaTurnoAperta={() => setRichiestaTurnoDaAprireId(null)}
+              insegnantiAulaStudio={insegnantiAulaStudio}
+            />
+          ) : userRole === 'studente' ? (
+            <AulaStudioStudentView
+              db={db}
+              user={user}
+              userName={userName}
+              userRole={userRole}
+              lang={lang as any}
+              isRTL={isRTL}
+              colors={colors as any}
+              t={t}
+              mostraAlert={mostraAlert}
+              canGestireAulaStudio={canGestireAulaStudio}
+              registraAttivita={registraAttivita}
+              inviaNotificaConPreferenza={inviaNotificaConPreferenza}
+              scriviECondividiExcel={scriviECondividiExcel}
+              classiLista={classiLista}
+              profiloAulaStudio={profiloAulaStudio}
+              onProfiloAulaStudioSalvato={caricaDatiGenerali}
+              gestoriAulaStudio={gestoriAulaStudio}
+            />
+          ) : userRole === 'insegnante' ? (
+            <AulaStudioTurniView
+              db={db}
+              user={user}
+              userName={userName}
+              userRole={userRole}
+              lang={lang as any}
+              isRTL={isRTL}
+              colors={colors as any}
+              t={t}
+              mostraAlert={mostraAlert}
+              canGestireAulaStudio={canGestireAulaStudio}
+              registraAttivita={registraAttivita}
+              inviaNotificaConPreferenza={inviaNotificaConPreferenza}
+              scriviECondividiExcel={scriviECondividiExcel}
+              classiLista={classiLista}
+              profiloAulaStudio={profiloAulaStudio}
+              onProfiloAulaStudioSalvato={caricaDatiGenerali}
+              gestoriAulaStudio={gestoriAulaStudio}
+              richiestaTurnoDaAprireId={richiestaTurnoDaAprireId}
+              onRichiestaTurnoAperta={() => setRichiestaTurnoDaAprireId(null)}
+            />
+          ) : (
+            <ScrollView contentContainerStyle={styles.bodyContent}>
+              <Text style={styles.infoText}>{t('aulaStudioSoloStudenti', lang)}</Text>
+            </ScrollView>
+          )
+        )}
 
         {/* ------ VISTA MANUTENZIONE ------ */}
         {vistaAttiva === 'manutenzione' && (() => {
@@ -4162,7 +4661,7 @@ export default function App() {
                     })}
                   </View>
                 ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tableScrollWrap}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
                   <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 520 }]}>
                     <View style={styles.tableHeaderRow}>
                       <Text style={[styles.tableHeaderCell, styles.tableColAula]}>{t('colAula', lang)}</Text>
@@ -4186,7 +4685,7 @@ export default function App() {
                               <Text style={styles.statoBadgeText}>{etichettaStatoBreve(riga.stato)}</Text>
                             </View>
                           </View>
-                          <Text style={[styles.tableCell, styles.tableColData]}>{riga.data}</Text>
+                          <Text style={[styles.tableCell, styles.tableColData]}>{dataArabo(riga.data, lang)}</Text>
                         </RigaTabella>
                       );
                     })}
@@ -4283,15 +4782,15 @@ export default function App() {
                           <View style={styles.storicoBlocco}>
                             <View style={styles.storicoRiga}>
                               <Text style={styles.storicoLabel}>{t('segnalatoIl', lang)}</Text>
-                              <Text style={styles.storicoValore}>{formattaDataOra(s.tsSegnalazione) || s.data}</Text>
+                              <Text style={styles.storicoValore}>{formattaDataOra(s.tsSegnalazione, lang) || dataArabo(s.data, lang)}</Text>
                             </View>
                             <View style={styles.storicoRiga}>
                               <Text style={styles.storicoLabel}>{t('presoInCaricoIl', lang)}</Text>
-                              <Text style={styles.storicoValore}>{s.tsPresaInCarico ? formattaDataOra(s.tsPresaInCarico) : t('nonAncora', lang)}</Text>
+                              <Text style={styles.storicoValore}>{s.tsPresaInCarico ? formattaDataOra(s.tsPresaInCarico, lang) : t('nonAncora', lang)}</Text>
                             </View>
                             <View style={styles.storicoRiga}>
                               <Text style={styles.storicoLabel}>{t('risoltoIl', lang)}</Text>
-                              <Text style={styles.storicoValore}>{s.tsRisoluzione ? formattaDataOra(s.tsRisoluzione) : t('nonAncora', lang)}</Text>
+                              <Text style={styles.storicoValore}>{s.tsRisoluzione ? formattaDataOra(s.tsRisoluzione, lang) : t('nonAncora', lang)}</Text>
                             </View>
                           </View>
 
@@ -4332,7 +4831,7 @@ export default function App() {
                                 <View key={i} style={styles.diarioVoce}>
                                   <View style={styles.diarioVoceHeader}>
                                     <Text style={styles.diarioAutore}>{voce.autore}</Text>
-                                    <Text style={styles.diarioTimestamp}>{formattaDataOra(voce.timestamp)}</Text>
+                                    <Text style={styles.diarioTimestamp}>{formattaDataOra(voce.timestamp, lang)}</Text>
                                   </View>
                                   <Text style={styles.diarioTesto}>{voce.testo}</Text>
                                 </View>
@@ -4387,7 +4886,7 @@ export default function App() {
               <Text style={[styles.sectionHeaderTitle, { marginBottom: 16 }]}>{t('navGestione', lang)}</Text>
 
               {gestioneVistaSpeciali ? (
-                <>
+                <Pressable style={{ flex: 1 }} onPress={() => setGestioneVistaSpeciali(false)}>
                   <TouchableOpacity style={styles.backLinkRow} onPress={() => setGestioneVistaSpeciali(false)}>
                     <Text style={styles.backLinkText}>{isRTL ? `${t('torna', lang)} ›` : `‹ ${t('torna', lang)}`}</Text>
                   </TouchableOpacity>
@@ -4398,7 +4897,7 @@ export default function App() {
                   )}
 
                   {prenotazioniSpecialiTutte.length > 0 && (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tableScrollWrap}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
                       <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 520 }]}>
                         <View style={styles.tableHeaderRow}>
                           <Text style={[styles.tableHeaderCell, styles.tableColAula]}>{t('aula', lang)}</Text>
@@ -4414,27 +4913,27 @@ export default function App() {
                             <TouchableOpacity key={p.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]} onPress={() => setPrenotazioneDettaglio(p)}>
                               <Text style={[styles.tableCell, styles.tableColAula]} numberOfLines={1}><Text style={{ color: colors.danger }}>★ </Text>{risolviNomeAula(p.aulaNome, lang)}{p.sezione ? ` (${risolviNomeSezione(p.sezione, lang)})` : ''}</Text>
                               <Text style={[styles.tableCell, styles.tableColUtente]} numberOfLines={1}>{p.utenteNome}</Text>
-                              <Text style={[styles.tableCell, styles.tableColTipo]} numberOfLines={1}>{p.fasce.join(', ')}</Text>
+                              <Text style={[styles.tableCell, styles.tableColTipo]} numberOfLines={1}>{numArabo(p.fasce.join(', '), lang)}</Text>
                               <View style={styles.tableColStato}>
                                 <View style={[styles.statoBadge, { backgroundColor: coloreStatoPrenotazione }]}>
                                   <Text style={styles.statoBadgeText}>{etichettaStatoPrenotazione}</Text>
                                 </View>
                               </View>
-                              <Text style={[styles.tableCell, styles.tableColData]}>{p.data}</Text>
+                              <Text style={[styles.tableCell, styles.tableColData]}>{dataArabo(p.data, lang)}</Text>
                             </TouchableOpacity>
                           );
                         })}
                       </View>
                     </ScrollView>
                   )}
-                </>
+                </Pressable>
               ) : (
                 <>
                   <View style={Platform.OS === 'android' ? styles.specialiMeseRowAndroid : styles.specialiMeseRowWeb}>
                     <TouchableOpacity style={[styles.specialiButton, Platform.OS === 'android' ? styles.specialiButtonAndroidHalf : styles.specialiButtonWebRow]} onPress={() => setGestioneVistaSpeciali(true)}>
                       <Text style={styles.specialiButtonText}>★ {t('speciali', lang)}</Text>
                       <View style={styles.specialiButtonBadge}>
-                        <Text style={styles.specialiButtonBadgeText}>{prenotazioniSpecialiTutte.length}</Text>
+                        <Text style={styles.specialiButtonBadgeText}>{numArabo(prenotazioniSpecialiTutte.length, lang)}</Text>
                       </View>
                     </TouchableOpacity>
 
@@ -4480,7 +4979,7 @@ export default function App() {
                           style={[styles.dayButton, pendente ? styles.dayButtonPending : styles.dayButtonFree]}
                           onPress={() => setGiornoGestioneSelezionato(giornoStr)}
                         >
-                          <Text style={[styles.dayButtonText, pendente && styles.dayButtonTextPending]}>{giorno}</Text>
+                          <Text style={[styles.dayButtonText, pendente && styles.dayButtonTextPending]}>{numArabo(giorno, lang)}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -4507,7 +5006,7 @@ export default function App() {
                             <Text style={styles.calRowText} numberOfLines={2} ellipsizeMode="tail">
                               {p.richiedeAutorizzazioneSpeciale ? <Text style={{ color: colors.danger }}>★ </Text> : null}
                               <Text style={styles.calRowAula}>{risolviNomeAula(p.aulaNome, lang)}{p.sezione ? ` (${risolviNomeSezione(p.sezione, lang)})` : ''}</Text>
-                              {'  '}· {p.utenteNome} · {p.fasce.join(', ')}
+                              {'  '}· {p.utenteNome} · {numArabo(p.fasce.join(', '), lang)}
                             </Text>
                             <View style={[styles.statoBadge, { backgroundColor: coloreStatoPrenotazione }]}>
                               <Text style={styles.statoBadgeText}>{etichettaStatoPrenotazione}</Text>
@@ -4546,7 +5045,7 @@ export default function App() {
                           </View>
 
                           <Text style={styles.gestioneListMeta}>{t('utente', lang)}: {prenotazioneDettaglio.utenteNome} ({prenotazioneDettaglio.utenteEmail})</Text>
-                          <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('data', lang)}: {prenotazioneDettaglio.data} | {t('ore', lang)}: {prenotazioneDettaglio.fasce.join(', ')}</Text>
+                          <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('data', lang)}: {dataArabo(prenotazioneDettaglio.data, lang)} | {t('ore', lang)}: {numArabo(prenotazioneDettaglio.fasce.join(', '), lang)}</Text>
                           {prenotazioneDettaglio.motivo ? <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('motivo', lang)}: {prenotazioneDettaglio.motivo}</Text> : null}
                           {prenotazioneDettaglio.studenteIPI ? (
                             <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>
@@ -4613,18 +5112,43 @@ export default function App() {
             [TIPI_REGISTRO.RIMOZIONE_DOMINIO]: 'Rimozione dominio',
             [TIPI_REGISTRO.CREAZIONE_SEGNALAZIONE]: 'Creazione segnalazione',
             [TIPI_REGISTRO.PRESA_IN_CARICO_SEGNALAZIONE]: 'Presa in carico segnalazione',
-            [TIPI_REGISTRO.RISOLUZIONE_SEGNALAZIONE]: 'Risoluzione segnalazione'
+            [TIPI_REGISTRO.RISOLUZIONE_SEGNALAZIONE]: 'Risoluzione segnalazione',
+            aula_studio_prenotazione: 'Aula Studio: prenotazione',
+            aula_studio_cancellazione: 'Aula Studio: cancellazione',
+            aula_studio_promozione_waitlist: 'Aula Studio: promozione da lista d\'attesa',
+            aula_studio_aggiunta_manuale: 'Aula Studio: aggiunta manuale',
+            aula_studio_presenza_aggiornata: 'Aula Studio: presenza aggiornata',
+            aula_studio_pallino_rosso: 'Aula Studio: pallino rosso',
+            aula_studio_azione_terzo_pallino: 'Aula Studio: azione al 3° pallino',
+            aula_studio_modifica_config: 'Aula Studio: modifica impostazioni'
           };
+
+          // Punto 6a: nelle sottoviste di sola lettura (senza form/modale a rischio), un tap
+          // nell'area vuota della schermata equivale a premere "Torna" — scorciatoia in più,
+          // il pulsante esplicito resta comunque presente.
+          const VOCI_TAP_VUOTO_TORNA = ['preferenze', 'notifiche', 'registro', 'profili', 'esporta', 'blocca', 'avanzate', 'utenti'];
+          const tapVuotoTornaAttivo = VOCI_TAP_VUOTO_TORNA.includes(impostazioniVista);
 
           return (
             <ScrollView contentContainerStyle={styles.bodyContent}>
               <Text style={[styles.sectionHeaderTitle, { marginBottom: 14 }]}>{t('navImpostazioni', lang)}</Text>
 
               {impostazioniVista !== 'menu' && (
-                <TouchableOpacity style={styles.backLinkRow} onPress={() => setImpostazioniVista('menu')}>
+                <TouchableOpacity
+                  style={styles.backLinkRow}
+                  onPress={() => {
+                    if (impostazioniVista === 'auleSezione' || impostazioniVista === 'aulaStudio') {
+                      setImpostazioniVista('aule');
+                    } else {
+                      setImpostazioniVista('menu');
+                    }
+                  }}
+                >
                   <Text style={styles.backLinkText}>{isRTL ? `${t('torna', lang)} ›` : `‹ ${t('torna', lang)}`}</Text>
                 </TouchableOpacity>
               )}
+
+              <Pressable style={{ flex: 1 }} onPress={tapVuotoTornaAttivo ? () => setImpostazioniVista('menu') : undefined}>
 
               {impostazioniVista === 'menu' && (
                 <>
@@ -4706,7 +5230,17 @@ export default function App() {
                       </TouchableOpacity>
                     )}
 
-                    {(canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni) && (
+                    {canGestireAule && (
+                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('aule')}>
+                        <View style={styles.settingsMenuItemLeft}>
+                          <Text style={styles.settingsMenuItemIcon}>🏫</Text>
+                          <Text style={styles.settingsMenuItemLabel}>{lang === 'ar' ? 'القاعات' : 'Aule'}</Text>
+                        </View>
+                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {(canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni || canGestireAulaStudio) && (
                       <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('esporta')}>
                         <View style={styles.settingsMenuItemLeft}>
                           <Text style={styles.settingsMenuItemIcon}>📤</Text>
@@ -4737,6 +5271,120 @@ export default function App() {
                     )}
                   </View>
                 </>
+              )}
+
+              {/* Sottovista: Aule — menù con le 4 sezioni Home + Aula Studio (sostituisce il pulsante "✎ Modifica" della Home). */}
+              {impostazioniVista === 'aule' && canGestireAule && (
+                <>
+                  <Text style={styles.settingsMenuSottotitolo}>
+                    {lang === 'ar' ? 'إدارة الأقسام والقاعات المعروضة في الصفحة الرئيسية.' : 'Gestisci le sezioni e le aule mostrate nella Home.'}
+                  </Text>
+                  <View style={styles.settingsMenuList}>
+                    {sezioniLista.map((sez, idx) => {
+                      const isAulaStudio = sez.speciale === 'aulaStudio';
+                      return (
+                        <View key={sez.id} style={[styles.settingsMenuItem, { flexDirection: 'column', alignItems: 'stretch', gap: 10 }]}>
+                          <TouchableOpacity
+                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                            onPress={() => {
+                              if (isAulaStudio) {
+                                setImpostazioniVista('aulaStudio');
+                              } else {
+                                setSezioneSelezionata(sez.nome);
+                                setImpostazioniVista('auleSezione');
+                              }
+                            }}
+                          >
+                            <View style={styles.settingsMenuItemLeft}>
+                              <Text style={styles.settingsMenuItemIcon}>{isAulaStudio ? '📖' : '🏫'}</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{risolviNomeSezione(sez.nome, lang)}</Text>
+                            </View>
+                            <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaSezione(idx, 'su')} disabled={idx === 0}>
+                              <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▲</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaSezione(idx, 'giu')} disabled={idx === sezioniLista.length - 1}>
+                              <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▼</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaSezione(sez)}>
+                              <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
+                            </TouchableOpacity>
+                            {!isAulaStudio && (
+                              <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaSezione(sez.id)}>
+                                <Text style={styles.btnText}>{t('elimina', lang)}</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                  <TouchableOpacity style={[styles.addButton, { marginTop: 14, alignSelf: isRTL ? 'flex-end' : 'flex-start' }]} onPress={() => setModalNuovaSezione(true)}>
+                    <Text style={styles.addButtonText}>{t('aggiungiSezione', lang)}</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* Sottovista: Aule di una sezione (raggiunta da Impostazioni → Aule → una delle 4 sezioni). */}
+              {impostazioniVista === 'auleSezione' && canGestireAule && sezioneSelezionata && (
+                <View>
+                  <View style={styles.sectionTitleRow}>
+                    <Text style={styles.sectionHeaderTitle}>{risolviNomeSezione(sezioneSelezionata, lang)}</Text>
+                  </View>
+                  {aule.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)).map((aula, idx, arr) => (
+                    <View key={aula.id} style={styles.aulaCard}>
+                      <View>
+                        <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
+                        <Text style={styles.aulaDesc}>{t('capienza', lang)}: {numArabo(aula.capienza, lang)}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaAula(aula.id, 'su')} disabled={idx === 0}>
+                          <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▲</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.smallMoveBtn} onPress={() => spostaAula(aula.id, 'giu')} disabled={idx === arr.length - 1}>
+                          <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>▼</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaAula(aula)}>
+                          <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
+                          <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaAula(aula.id)}>
+                          <Text style={styles.btnText}>{t('elimina', lang)}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                  <TouchableOpacity style={[styles.addButton, { alignSelf: isRTL ? 'flex-end' : 'flex-start', marginTop: 4 }]} onPress={apriNuovaAula}>
+                    <Text style={styles.addButtonText}>{t('aggiungiAula', lang)}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Sottovista: Impostazioni Aula Studio */}
+              {impostazioniVista === 'aulaStudio' && canGestireAulaStudio && (
+                <AulaStudioImpostazioni
+                  db={db}
+                  user={user}
+                  userName={userName}
+                  userRole={userRole}
+                  lang={lang as any}
+                  isRTL={isRTL}
+                  colors={colors as any}
+                  t={t}
+                  mostraAlert={mostraAlert}
+                  canGestireAulaStudio={canGestireAulaStudio}
+                  registraAttivita={registraAttivita}
+                  inviaNotificaConPreferenza={inviaNotificaConPreferenza}
+                  scriviECondividiExcel={scriviECondividiExcel}
+                  classiLista={classiLista}
+                  profiloAulaStudio={profiloAulaStudio}
+                  onProfiloAulaStudioSalvato={caricaDatiGenerali}
+                  gestoriAulaStudio={gestoriAulaStudio}
+                />
               )}
 
               {/* Sottovista: Preferenze */}
@@ -4785,6 +5433,9 @@ export default function App() {
                 const categorieManutenzione = categorieNotifiche.filter((cat) =>
                   cat.key === CATEGORIE_NOTIFICHE.NUOVA_SEGNALAZIONE || cat.key === CATEGORIE_NOTIFICHE.INIZIO_LAVORO || cat.key === CATEGORIE_NOTIFICHE.FINE_LAVORO
                 );
+                const categorieAulaStudio = categorieNotifiche.filter((cat) =>
+                  cat.key === CATEGORIE_NOTIFICHE.RICHIESTA_TURNO_AULA_STUDIO || cat.key === CATEGORIE_NOTIFICHE.ESITO_TURNO_AULA_STUDIO
+                );
                 return (
                   <View style={[styles.settingsCard, styles.settingsCardNarrow]}>
                     <Text style={styles.settingsCardTitle}>{t('sezioneNotifiche', lang)}</Text>
@@ -4809,6 +5460,22 @@ export default function App() {
                       <>
                         <Text style={styles.notificheGruppoTitolo}>{t('gruppoNotificheManutenzione', lang)}</Text>
                         {categorieManutenzione.map((cat) => (
+                          <View key={cat.key}>
+                            <TouchableOpacity style={styles.checkboxRow} onPress={() => toggleNotifica(cat.key)}>
+                              <View style={[styles.checkboxBox, notifichePrefs[cat.key] && styles.checkboxBoxChecked]}>
+                                {notifichePrefs[cat.key] && <Text style={styles.checkboxCheckmark}>✓</Text>}
+                              </View>
+                              <Text style={styles.checkboxLabel}>{cat.label}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </>
+                    )}
+
+                    {categorieAulaStudio.length > 0 && (
+                      <>
+                        <Text style={styles.notificheGruppoTitolo}>{t('gruppoNotificheAulaStudio', lang)}</Text>
+                        {categorieAulaStudio.map((cat) => (
                           <View key={cat.key}>
                             <TouchableOpacity style={styles.checkboxRow} onPress={() => toggleNotifica(cat.key)}>
                               <View style={[styles.checkboxBox, notifichePrefs[cat.key] && styles.checkboxBoxChecked]}>
@@ -4850,7 +5517,7 @@ export default function App() {
                   {utentiFiltrati.length === 0 ? (
                     <Text style={{ color: colors.textMuted, fontSize: 13 }}>{t('nessunUtenteTrovatoBlocco', lang)}</Text>
                   ) : (
-                    <ScrollView horizontal={Platform.OS !== 'android'} showsHorizontalScrollIndicator={false} style={styles.tableScrollWrap}>
+                    <ScrollView horizontal={Platform.OS !== 'android'} showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
                       <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: '100%' }]}>
                         <View style={styles.tableHeaderRow}>
                           <Text style={[styles.tableHeaderCell, styles.utentiColNome]}>{t('nome', lang)}</Text>
@@ -4935,6 +5602,20 @@ export default function App() {
 
                   {mostraFormAggiungiClasse && (
                     <View style={styles.formRow}>
+                      <View style={{ flexDirection: 'row', gap: 8, marginRight: 8 }}>
+                        <TouchableOpacity
+                          style={[styles.editToggleBtn, { backgroundColor: nuovaClasseTipo === 'medie' ? colors.primary : colors.surfaceAlt }]}
+                          onPress={() => setNuovaClasseTipo('medie')}
+                        >
+                          <Text style={[styles.editToggleBtnText, { color: nuovaClasseTipo === 'medie' ? colors.primaryText : colors.textMain }]}>{t('aulaStudioTipoMedie', lang)}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.editToggleBtn, { backgroundColor: nuovaClasseTipo === 'ipi' ? colors.primary : colors.surfaceAlt }]}
+                          onPress={() => setNuovaClasseTipo('ipi')}
+                        >
+                          <Text style={[styles.editToggleBtnText, { color: nuovaClasseTipo === 'ipi' ? colors.primaryText : colors.textMain }]}>{t('aulaStudioTipoIpi', lang)}</Text>
+                        </TouchableOpacity>
+                      </View>
                       <TextInput
                         style={[styles.input, { flex: 1 }]}
                         placeholder={t('nomeClasse', lang)}
@@ -4963,23 +5644,42 @@ export default function App() {
                   {classiLista.length === 0 && (
                     <Text style={styles.infoText}>{t('nessunaClasse', lang)}</Text>
                   )}
-                  <View style={styles.classiGrid}>
-                    {classiLista.map((c) => (
-                      <View key={c.id} style={styles.classeCard}>
-                        <Text style={styles.classeCardNome} numberOfLines={1}>{c.nome}</Text>
-                        {modalitaModificaClassi && (
-                          <View style={styles.classeCardAzioni}>
-                            <TouchableOpacity style={styles.classeCardBtnModifica} onPress={() => avviaModificaClasse(c)}>
-                              <Text style={styles.classeCardBtnModificaText}>{t('modifica', lang)}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.classeCardBtnRimuovi} onPress={() => eliminaClasse(c.id)}>
-                              <Text style={styles.classeCardBtnRimuoviText}>✕</Text>
-                            </TouchableOpacity>
+                  {[
+                    { chiave: 'medie', titolo: t('aulaStudioTipoMedie', lang), elenco: classiLista.filter((c) => c.tipo === 'medie') },
+                    { chiave: 'ipi', titolo: t('aulaStudioTipoIpi', lang), elenco: classiLista.filter((c) => c.tipo === 'ipi') },
+                    { chiave: 'altro', titolo: t('classiDaClassificare', lang), elenco: classiLista.filter((c) => c.tipo !== 'medie' && c.tipo !== 'ipi') },
+                  ].map((gruppo) => gruppo.elenco.length === 0 ? null : (
+                    <View key={gruppo.chiave} style={{ marginBottom: 14 }}>
+                      <Text style={[styles.sectionHeaderTitle, { fontSize: 15, marginBottom: 8 }]}>{gruppo.titolo}</Text>
+                      {gruppo.chiave === 'altro' && modalitaModificaClassi && (
+                        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                          <TouchableOpacity style={styles.smallEditBtn} onPress={() => classificaClassiNonAssegnate('medie')}>
+                            <Text style={styles.btnText}>{t('classificaComeMedie', lang)}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.smallEditBtn} onPress={() => classificaClassiNonAssegnate('ipi')}>
+                            <Text style={styles.btnText}>{t('classificaComeIpi', lang)}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      <View style={styles.classiGrid}>
+                        {gruppo.elenco.map((c) => (
+                          <View key={c.id} style={styles.classeCard}>
+                            <Text style={styles.classeCardNome} numberOfLines={1}>{c.nome}</Text>
+                            {modalitaModificaClassi && (
+                              <View style={styles.classeCardAzioni}>
+                                <TouchableOpacity style={styles.classeCardBtnModifica} onPress={() => avviaModificaClasse(c)}>
+                                  <Text style={styles.classeCardBtnModificaText}>{t('modifica', lang)}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.classeCardBtnRimuovi} onPress={() => eliminaClasse(c.id)}>
+                                  <Text style={styles.classeCardBtnRimuoviText}>✕</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
                           </View>
-                        )}
+                        ))}
                       </View>
-                    ))}
-                  </View>
+                    </View>
+                  ))}
                 </View>
               )}
 
@@ -5255,7 +5955,7 @@ export default function App() {
                           <View key={u.id} style={[styles.excelRow, idx % 2 === 0 ? styles.excelRowEven : styles.excelRowOdd]}>
                             <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}</Text>
                             <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{u.email}</Text>
-                            <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{formattaDataOra(u.createdAt)}</Text>
+                            <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{formattaDataOra(u.createdAt, lang)}</Text>
                             <View style={{ flex: 1, alignItems: 'center', padding: 10 }}>
                               {u.email !== user.email && (
                                 <TouchableOpacity
@@ -5281,7 +5981,7 @@ export default function App() {
                             return (
                               <View key={u.id} style={[idx % 2 === 0 ? styles.excelRowEven : styles.excelRowOdd, idx !== utentiPeriodo.length - 1 && { borderBottomWidth: 1, borderColor: colors.surface }]}>
                                 <TouchableOpacity
-                                  style={[styles.compactUserRow, isRTL && { flexDirection: 'row-reverse' }]}
+                                  style={styles.compactUserRow}
                                   onPress={() => setRigheEspanseBloccoUtenti(prev => ({ ...prev, [u.id]: !prev[u.id] }))}
                                 >
                                   <View style={{ flex: 1 }}>
@@ -5295,7 +5995,7 @@ export default function App() {
                                 {espansa && (
                                   <View style={[styles.compactUserDetails, isRTL && { alignItems: 'flex-end' }]}>
                                     <Text style={[styles.compactUserDetailRow, isRTL && { textAlign: 'right' }]}>
-                                      {t('colonnaRegistrazione', lang)}: {formattaDataOra(u.createdAt)}
+                                      {t('colonnaRegistrazione', lang)}: {formattaDataOra(u.createdAt, lang)}
                                     </Text>
                                     {u.email !== user.email && (
                                       <TouchableOpacity
@@ -5318,18 +6018,30 @@ export default function App() {
               })()}
 
               {/* Sottovista: Esporta */}
-              {impostazioniVista === 'esporta' && (canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni) && (
+              {impostazioniVista === 'esporta' && (canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni || canGestireAulaStudio) && (
                 <View style={styles.resetPanelCard}>
                   <Text style={[styles.aulaTitle, { color: colors.primary, marginBottom: 14 }]}>{t('areaEsportaGestore', lang)}</Text>
 
                   <Text style={[styles.label, { marginBottom: 10 }]}>{t('resetSceltaTipo', lang)}</Text>
                   <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-                    <TouchableOpacity
-                      style={[styles.tabButton, esportaTipoSelezionato === 'prenotazioni' && styles.tabButtonActive]}
-                      onPress={() => setEsportaTipoSelezionato('prenotazioni')}
-                    >
-                      <Text style={[styles.tabButtonText, esportaTipoSelezionato === 'prenotazioni' && styles.tabButtonTextActive]}>{t('resetTipoPrenotazioni', lang)}</Text>
-                    </TouchableOpacity>
+                    {(canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni) && (
+                      <TouchableOpacity
+                        style={[styles.tabButton, esportaTipoSelezionato === 'prenotazioni' && styles.tabButtonActive]}
+                        onPress={() => setEsportaTipoSelezionato('prenotazioni')}
+                      >
+                        <Text style={[styles.tabButtonText, esportaTipoSelezionato === 'prenotazioni' && styles.tabButtonTextActive]}>{t('resetTipoPrenotazioni', lang)}</Text>
+                      </TouchableOpacity>
+                    )}
+                    {canGestireAulaStudio && (
+                      <TouchableOpacity
+                        style={[styles.tabButton, esportaTipoSelezionato === 'aulaStudio' && styles.tabButtonActive]}
+                        onPress={() => setEsportaTipoSelezionato('aulaStudio')}
+                      >
+                        <Text style={[styles.tabButtonText, esportaTipoSelezionato === 'aulaStudio' && styles.tabButtonTextActive]}>
+                          {lang === 'ar' ? 'قاعة الدراسة' : 'Aula Studio'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                     {canEsportarePrenotazioniSegnalazioni && (
                       <TouchableOpacity
                         style={[styles.tabButton, esportaTipoSelezionato === 'manutenzione' && styles.tabButtonActive]}
@@ -5348,7 +6060,18 @@ export default function App() {
                     )}
                   </View>
 
-                  {esportaTipoSelezionato === 'prenotazioni' && (
+                  {esportaTipoSelezionato === 'aulaStudio' && canGestireAulaStudio && (
+                    <AulaStudioEsportaPanel
+                      db={db}
+                      lang={lang as any}
+                      colors={colors as any}
+                      t={t}
+                      mostraAlert={mostraAlert}
+                      scriviECondividiExcel={scriviECondividiExcel}
+                    />
+                  )}
+
+                  {esportaTipoSelezionato === 'prenotazioni' && (canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni) && (
                     <>
                       <Text style={[styles.label, { marginBottom: 10 }]}>{t('selezionaModalitaReset', lang)}</Text>
                       <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -5498,7 +6221,7 @@ export default function App() {
                   setEsportazioneInCorso(true);
                   try {
                     const righe = datiFiltrati.map(r => ({
-                      [t('data', lang)]: formattaDataOra(r.timestamp),
+                      [t('data', lang)]: formattaDataOra(r.timestamp, lang),
                       [t('utente', lang)]: r.userName || r.userEmail,
                       'Tipo': tipiEtichette[r.tipo] || r.tipo,
                       'Dettaglio': r.dettaglio
@@ -5520,9 +6243,9 @@ export default function App() {
                   <View style={styles.resetPanelCard}>
                     <Text style={[styles.aulaTitle, { color: colors.primary, marginBottom: 14 }]}>{t('registroAttivita', lang)}</Text>
 
-                    <Text style={[styles.label, { marginBottom: 10 }]}>Filtra per tipo di azione:</Text>
+                    <Text style={[styles.label, { marginBottom: 10 }]}>{lang === 'ar' ? 'تصفية حسب نوع الإجراء:' : 'Filtra per tipo di azione:'}</Text>
                     <TouchableOpacity style={styles.dropdownTrigger} onPress={() => setFiltroTipoRegistroDropdownAperto(true)}>
-                      <Text style={styles.dropdownTriggerText}>{filtroTipoRegistro === 'Tutte' ? 'Tutte' : (tipiEtichette[filtroTipoRegistro] || filtroTipoRegistro)}</Text>
+                      <Text style={styles.dropdownTriggerText}>{filtroTipoRegistro === 'Tutte' ? t('tutte', lang) : (tipiEtichette[filtroTipoRegistro] || filtroTipoRegistro)}</Text>
                       <Text style={styles.dropdownArrow}>▼</Text>
                     </TouchableOpacity>
                     <Modal visible={filtroTipoRegistroDropdownAperto} animationType="fade" transparent onRequestClose={() => setFiltroTipoRegistroDropdownAperto(false)}>
@@ -5530,7 +6253,7 @@ export default function App() {
                         <View style={styles.dropdownOptionsList}>
                           <ScrollView style={{ maxHeight: 400 }}>
                             <TouchableOpacity style={[styles.dropdownOption, filtroTipoRegistro === 'Tutte' && styles.dropdownOptionActive]} onPress={() => { setFiltroTipoRegistro('Tutte'); setFiltroTipoRegistroDropdownAperto(false); }}>
-                              <Text style={[styles.dropdownOptionText, filtroTipoRegistro === 'Tutte' && styles.dropdownOptionTextActive]}>Tutte</Text>
+                              <Text style={[styles.dropdownOptionText, filtroTipoRegistro === 'Tutte' && styles.dropdownOptionTextActive]}>{t('tutte', lang)}</Text>
                             </TouchableOpacity>
                             {Object.keys(TIPI_REGISTRO).map(key => {
                               const tipo = TIPI_REGISTRO[key];
@@ -5597,7 +6320,7 @@ export default function App() {
                     {datiFiltrati.length === 0 ? (
                       <Text style={styles.infoText}>{t('nessunaAttivita', lang)}</Text>
                     ) : (
-                      <ScrollView horizontal={Platform.OS !== 'android'} showsHorizontalScrollIndicator={false} style={styles.tableScrollWrap}>
+                      <ScrollView horizontal={Platform.OS !== 'android'} showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
                         <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: Platform.OS === 'android' ? '100%' : 380 }]}>
                           <View style={styles.tableHeaderRow}>
                             {Platform.OS !== 'android' && (
@@ -5606,7 +6329,7 @@ export default function App() {
                             <Text style={[styles.tableHeaderCell, { flex: Platform.OS === 'android' ? 1 : 1.6, minWidth: Platform.OS === 'android' ? 90 : 150 }]}>
                               {Platform.OS === 'android' ? 'Utente' : t('email', lang)}
                             </Text>
-                            <Text style={[styles.tableHeaderCell, { flex: 1.3, minWidth: 100 }]}>Tipo</Text>
+                            <Text style={[styles.tableHeaderCell, { flex: 1.3, minWidth: 100 }]}>{t('tipoLabel', lang)}</Text>
                           </View>
                           {datiFiltrati.map((r, idx) => (
                             <TouchableOpacity key={r.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]} onPress={() => setRegistroDettaglio(r)}>
@@ -5635,10 +6358,10 @@ export default function App() {
                               <TouchableOpacity onPress={() => setRegistroDettaglio(null)}><Text style={styles.closeText}>✕</Text></TouchableOpacity>
                             </View>
                             <ScrollView style={styles.modalBodyScrollable}>
-                              <Text style={styles.gestioneListMeta}>{t('data', lang)}: {formattaDataOra(registroDettaglio.timestamp)}</Text>
+                              <Text style={styles.gestioneListMeta}>{t('data', lang)}: {formattaDataOra(registroDettaglio.timestamp, lang)}</Text>
                               <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('utente', lang)}: {registroDettaglio.userName || registroDettaglio.userEmail}</Text>
                               <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>Tipo: {tipiEtichette[registroDettaglio.tipo] || registroDettaglio.tipo}</Text>
-                              <Text style={[styles.label, { marginTop: 14 }]}>Dettaglio</Text>
+                              <Text style={[styles.label, { marginTop: 14 }]}>{t('dettaglioLabel', lang)}</Text>
                               <Text style={styles.gestioneListMeta}>{registroDettaglio.dettaglio}</Text>
                             </ScrollView>
                           </>
@@ -5661,22 +6384,22 @@ export default function App() {
                   {utentiLista.filter(u => u.id !== user.uid).length === 0 ? (
                     <Text style={styles.infoText}>{t('nessunAltroUtente', lang)}</Text>
                   ) : Platform.OS === 'web' ? (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tableScrollWrap}>
-                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 600 }]}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
+                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 760, width: '100%' }]}>
                         <View style={styles.tableHeaderRow}>
-                          <Text style={[styles.tableHeaderCell, { flex: 1.8, minWidth: 140 }]}>{t('nome', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, { flex: 2.5, minWidth: 190 }]}>{t('email', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1.6, minWidth: 160 }]}>{t('ruolo', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1, minWidth: 90 }]}>{t('azioni', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, { width: 160 }]}>{t('nome', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, { width: 290 }]}>{t('email', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { width: 170 }]}>{t('ruolo', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { width: 100 }]}>{t('azioni', lang)}</Text>
                         </View>
                         {utentiLista.filter(u => u.id !== user.uid).map((u, idx) => {
                           const hasOverrides = u.permessiSovrascritti && Object.keys(u.permessiSovrascritti).length > 0;
                           return (
                             <View key={u.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]}>
-                              <Text style={[styles.tableCell, { flex: 1.8, minWidth: 140 }]} numberOfLines={2}>{u.nome}</Text>
-                              <Text style={[styles.tableCell, { flex: 2.5, minWidth: 190 }]} numberOfLines={2}>{u.email}</Text>
-                              <Text style={[styles.tableCell, { textAlign: 'center' }, { flex: 1.6, minWidth: 160 }]} numberOfLines={1}>{etichettaRuolo(u.role, lang)}</Text>
-                              <View style={{ flex: 1, minWidth: 90, alignItems: 'center' }}>
+                              <Text style={[styles.tableCell, { width: 160 }]} numberOfLines={2}>{u.nome}</Text>
+                              <Text style={[styles.tableCell, { width: 290 }]} numberOfLines={1}>{u.email}</Text>
+                              <Text style={[styles.tableCell, { textAlign: 'center' }, { width: 170 }]} numberOfLines={1}>{etichettaRuolo(u.role, lang)}</Text>
+                              <View style={{ width: 100, alignItems: 'center' }}>
                                 <TouchableOpacity
                                   style={[styles.smallEditBtn, { backgroundColor: hasOverrides ? colors.success : colors.primary }]}
                                   onPress={() => {
@@ -5697,7 +6420,8 @@ export default function App() {
                                       puoModificareProfili: puoModificareProfili(u.role),
                                       puoGestireClassi: puoGestireClassi(u.role),
                                       puoCreareRuoliPersonalizzati: puoCreareRuoliPersonalizzati(u.role),
-                                      puoAssegnarePermessiRuoliPersonalizzati: puoAssegnarePermessiRuoliPersonalizzati(u.role)
+                                      puoAssegnarePermessiRuoliPersonalizzati: puoAssegnarePermessiRuoliPersonalizzati(u.role),
+                                      puoGestireAulaStudio: puoGestireAulaStudio(u.role)
                                     };
                                     const overrides = u.permessiSovrascritti || {};
                                     setPermessiModifica({ ...basePermessi, ...overrides });
@@ -5726,7 +6450,7 @@ export default function App() {
                           return (
                             <View key={u.id} style={[idx % 2 === 0 ? styles.excelRowEven : styles.excelRowOdd, idx !== arr.length - 1 && { borderBottomWidth: 1, borderColor: colors.surface }]}>
                               <TouchableOpacity
-                                style={[styles.compactUserRow, isRTL && { flexDirection: 'row-reverse' }]}
+                                style={styles.compactUserRow}
                                 onPress={() => setRigheEspansePermessiAvanzati(prev => ({ ...prev, [u.id]: !prev[u.id] }))}
                               >
                                 <View style={{ flex: 1 }}>
@@ -5760,7 +6484,8 @@ export default function App() {
                                         puoModificareProfili: puoModificareProfili(u.role),
                                         puoGestireClassi: puoGestireClassi(u.role),
                                         puoCreareRuoliPersonalizzati: puoCreareRuoliPersonalizzati(u.role),
-                                        puoAssegnarePermessiRuoliPersonalizzati: puoAssegnarePermessiRuoliPersonalizzati(u.role)
+                                        puoAssegnarePermessiRuoliPersonalizzati: puoAssegnarePermessiRuoliPersonalizzati(u.role),
+                                        puoGestireAulaStudio: puoGestireAulaStudio(u.role)
                                       };
                                       const overrides = u.permessiSovrascritti || {};
                                       setPermessiModifica({ ...basePermessi, ...overrides });
@@ -5866,7 +6591,7 @@ export default function App() {
                               <Text style={[styles.tableCell, { minWidth: 100, flex: 0.8 }]}>{u.classe || '—'}</Text>
                               <Text style={[styles.tableCell, { minWidth: 90, flex: 0.7 }]}>{u.dataNascita ? calcolaEta(u.dataNascita) : '—'}</Text>
                               {canModificareProfili && (
-                                <Text style={[styles.tableCell, { minWidth: 130, flex: 1 }]}>{u.dataScadenza ? formattaDataOra(u.dataScadenza) : '—'}</Text>
+                                <Text style={[styles.tableCell, { minWidth: 130, flex: 1 }]}>{u.dataScadenza ? formattaDataOra(u.dataScadenza, lang) : '—'}</Text>
                               )}
                             </TouchableOpacity>
                           ))}
@@ -5908,7 +6633,7 @@ export default function App() {
                             {canModificareProfili && (
                               <View style={[styles.profiloCardMobileRow, { borderBottomWidth: 0 }]}>
                                 <Text style={styles.profiloCardMobileLabel}>{t('dataScadenza', lang)}</Text>
-                                <Text style={styles.profiloCardMobileValue}>{u.dataScadenza ? formattaDataOra(u.dataScadenza) : '—'}</Text>
+                                <Text style={styles.profiloCardMobileValue}>{u.dataScadenza ? formattaDataOra(u.dataScadenza, lang) : '—'}</Text>
                               </View>
                             )}
                           </TouchableOpacity>
@@ -5919,6 +6644,7 @@ export default function App() {
                 );
               })()}
 
+              </Pressable>
             </ScrollView>
           );
         })()}
@@ -5928,7 +6654,7 @@ export default function App() {
             ========================================================== */}
         {Platform.OS === 'android' && (
           <View style={[styles.bottomTabBar, { paddingBottom: Math.max(insets.bottom, 8) + 10 }]}>
-            <TouchableOpacity style={styles.bottomTabItem} onPress={() => { setVistaAttiva('home'); setSezioneSelezionata(null); setModalitaModificaAule(false); }}>
+            <TouchableOpacity style={styles.bottomTabItem} onPress={() => { setVistaAttiva('home'); setSezioneSelezionata(null); }}>
               <Text style={[styles.bottomTabIcon, vistaAttiva === 'home' && styles.bottomTabIconActive]}>🏠</Text>
               <Text style={[styles.bottomTabLabel, vistaAttiva === 'home' && styles.bottomTabLabelActive]} numberOfLines={1}>{t('navHome', lang)}</Text>
             </TouchableOpacity>
@@ -5948,6 +6674,7 @@ export default function App() {
               <Text style={[styles.bottomTabIcon, vistaAttiva === 'manutenzione' && styles.bottomTabIconActive]}>🛠️</Text>
               <Text style={[styles.bottomTabLabel, vistaAttiva === 'manutenzione' && styles.bottomTabLabelActive]} numberOfLines={1}>{t('navManutenzione', lang)}</Text>
             </TouchableOpacity>
+            {/* "Aula Studio" è stata spostata come voce nella Home: vedi styles.cardGrid in VISTA HOME. */}
             <TouchableOpacity style={styles.bottomTabItem} onPress={() => setVistaAttiva('impostazioni')}>
               <Text style={[styles.bottomTabIcon, vistaAttiva === 'impostazioni' && styles.bottomTabIconActive]}>⚙️</Text>
               <Text style={[styles.bottomTabLabel, vistaAttiva === 'impostazioni' && styles.bottomTabLabelActive]} numberOfLines={1}>{t('navImpostazioni', lang)}</Text>
@@ -6074,7 +6801,7 @@ export default function App() {
                       onPress={() => toggleFascia(fascia)}
                     >
                       <Text style={[styles.fasciaText, selezionata && styles.fasciaTextSelected, (occupata || passata) && styles.fasciaTextDisabilitata]}>
-                        {occupata ? '🔒 ' : passata ? '🕐 ' : ''}{fascia}
+                        {occupata ? '🔒 ' : passata ? '🕐 ' : ''}{numArabo(fascia, lang)}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -6480,9 +7207,9 @@ export default function App() {
                   )}
                   <Text style={styles.gestioneListMeta}><Text style={{ fontWeight: 'bold' }}>{t('dataNascita', lang)}:</Text> {currentUserData.dataNascita || '—'}</Text>
                   <Text style={styles.gestioneListMeta}><Text style={{ fontWeight: 'bold' }}>{t('eta', lang)}:</Text> {currentUserData.dataNascita ? calcolaEta(currentUserData.dataNascita) : '—'}</Text>
-                  <Text style={styles.gestioneListMeta}><Text style={{ fontWeight: 'bold' }}>{t('dataRegistrazione', lang)}:</Text> {currentUserData.createdAt ? formattaDataOra(currentUserData.createdAt) : '—'}</Text>
+                  <Text style={styles.gestioneListMeta}><Text style={{ fontWeight: 'bold' }}>{t('dataRegistrazione', lang)}:</Text> {currentUserData.createdAt ? formattaDataOra(currentUserData.createdAt, lang) : '—'}</Text>
                   {currentUserData.dataScadenza && (
-                    <Text style={[styles.gestioneListMeta, { color: colors.danger }]}><Text style={{ fontWeight: 'bold' }}>{t('dataScadenza', lang)}:</Text> {formattaDataOra(currentUserData.dataScadenza)}</Text>
+                    <Text style={[styles.gestioneListMeta, { color: colors.danger }]}><Text style={{ fontWeight: 'bold' }}>{t('dataScadenza', lang)}:</Text> {formattaDataOra(currentUserData.dataScadenza, lang)}</Text>
                   )}
                 </>
               )}
@@ -6706,11 +7433,11 @@ export default function App() {
             {utentePermessiTarget && (
               <>
                 <View style={styles.modalHeaderFixed}>
-                  <Text style={styles.modalTitle} numberOfLines={1}>Permessi per {utentePermessiTarget.nome}</Text>
+                  <Text style={styles.modalTitle} numberOfLines={1}>{lang === 'ar' ? `الصلاحيات لـ ${utentePermessiTarget.nome}` : `Permessi per ${utentePermessiTarget.nome}`}</Text>
                   <TouchableOpacity onPress={() => setUtentePermessiTarget(null)}><Text style={styles.closeText}>✕</Text></TouchableOpacity>
                 </View>
                 <ScrollView style={styles.modalBodyScrollable} keyboardShouldPersistTaps="handled">
-                  <Text style={[styles.label, { marginBottom: 8 }]}>Ruolo base: <Text style={{ fontWeight: '700' }}>{etichettaRuolo(utentePermessiTarget.role, lang)}</Text></Text>
+                  <Text style={[styles.label, { marginBottom: 8 }]}>{lang === 'ar' ? 'الدور الأساسي: ' : 'Ruolo base: '}<Text style={{ fontWeight: '700' }}>{etichettaRuolo(utentePermessiTarget.role, lang)}</Text></Text>
 
                   <View style={styles.legendaRow}>
                     <View style={styles.legendaItem}>
@@ -6725,11 +7452,11 @@ export default function App() {
 
                   <View style={styles.permTable}>
                     <View style={styles.permTableHeaderRow}>
-                      <Text style={[styles.permTableHeaderCell, { flex: 3 }]}>Permesso</Text>
-                      <Text style={[styles.permTableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1 }]}>Attivo</Text>
+                      <Text style={[styles.permTableHeaderCell, { flex: 3 }]}>{t('permessoLabel', lang)}</Text>
+                      <Text style={[styles.permTableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1 }]}>{t('attivoLabel', lang)}</Text>
                     </View>
                     {(() => {
-                      let categoriaCorrente = null;
+                      let categoriaCorrente: any = null;
                       let rigaIdx = 0;
                       return RIGHE_TABELLA_PERMESSI.map((riga) => {
                         const value = permessiModifica[riga.permessoKey];
@@ -6751,7 +7478,7 @@ export default function App() {
                               onPress={() => togglePermesso(riga.permessoKey)}
                             >
                               <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingRight: 8 }}>
-                                <Text style={styles.permTableCellLabel}>{riga.label}</Text>
+                                <Text style={styles.permTableCellLabel}>{lang === 'ar' ? riga.labelAr : riga.label}</Text>
                                 {isOverride && (
                                   <View style={styles.permessoBadgeOverride}>
                                     <Text style={styles.permessoBadgeOverrideText}>{lang === 'ar' ? 'مخصّص' : 'Personalizzato'}</Text>
@@ -6773,10 +7500,10 @@ export default function App() {
                 <View style={styles.modalFooterFixed}>
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     <TouchableOpacity style={[styles.primaryButton, { backgroundColor: colors.danger, flex: 1 }]} onPress={() => { setPermessiModifica({}); setUtentePermessiTarget(null); }}>
-                      <Text style={[styles.buttonText, { color: '#FFF' }]}>Reset</Text>
+                      <Text style={[styles.buttonText, { color: '#FFF' }]}>{t('resetLabel', lang)}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.primaryButton, { flex: 2 }]} onPress={salvaPermessiUtente}>
-                      <Text style={styles.buttonText}>Salva</Text>
+                      <Text style={styles.buttonText}>{t('salva', lang)}</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -6795,7 +7522,7 @@ export default function App() {
 // ================================================================
 
 // --- Funzione per l'ombra (soft shadow) ---
-const softShadow = (colors, opacity = 0.08, radius = 8, y = 2) => ({
+const softShadow = (colors: any, opacity = 0.08, radius = 8, y = 2) => ({
   shadowColor: colors.shadow,
   shadowOffset: { width: 0, height: y },
   shadowOpacity: opacity,
@@ -6805,19 +7532,19 @@ const softShadow = (colors, opacity = 0.08, radius = 8, y = 2) => ({
 
 // --- Funzione per il date picker della data di nascita (profilo) ---
 // (questa funzione era già usata nella UI ma non ancora definita)
-const onChangeDateNascita = (event, selectedDate) => {
+const onChangeDateNascita = (event: any, selectedDate: any) => {
   // Nota: questa funzione va definita all'interno del componente App,
   // ma per completezza la mettiamo qui come riferimento.
   // Nel codice reale è già stata dichiarata nella parte 2.
 };
 
 // --- Stili dinamici (tutti i fogli di stile dell'app) ---
-const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
+const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
     paddingTop: ANDROID_STATUSBAR_HEIGHT,
-    ...(Platform.OS === 'web' ? { height: '100vh', maxHeight: '100vh', overflow: 'hidden' } : {}),
+    ...(Platform.OS === 'web' ? ({ height: '100vh', maxHeight: '100vh', overflow: 'hidden' } as any) : {}),
   },
 
 
@@ -6829,7 +7556,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
   },
   authBackground: { flex: 1, width: '100%' },
   authWatermarkWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
@@ -6840,7 +7567,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     opacity: colors.watermarkOpacity,
   },
   authOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(10,14,22,0.60)',
   },
   authTopBar: {
@@ -6952,7 +7679,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     ? { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }
     : { flexDirection: 'row', alignItems: 'center', gap: 8, rowGap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 1 },
   headerIconsRowLTR: {},
-  headerIconsRowRTL: { flexDirection: 'row-reverse' },
+  headerIconsRowRTL: {},
   headerTitleCentered: {
     color: colors.textMain,
     fontSize: Platform.OS === 'web' ? 15 : 13,
@@ -7306,7 +8033,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     textAlign: isRTL ? 'right' : 'left',
   },
   profiloCardMobileRow: {
-    flexDirection: isRTL ? 'row-reverse' : 'row',
+    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 6,
@@ -7413,14 +8140,18 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
   },
   permTableHeaderCellCenter: { textAlign: 'center' },
   permTableCategoriaRow: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.surfaceAlt,
     paddingVertical: 7,
     paddingHorizontal: 12,
     borderBottomWidth: 1,
     borderColor: colors.border,
+    borderLeftWidth: isRTL ? 0 : 3,
+    borderRightWidth: isRTL ? 3 : 0,
+    borderLeftColor: colors.primary,
+    borderRightColor: colors.primary,
   },
   permTableCategoriaText: {
-    color: colors.primaryText,
+    color: colors.textMain,
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.6,
@@ -7447,13 +8178,15 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
     paddingRight: isRTL ? 10 : 0,
   },
   permessoBadgeOverride: {
-    backgroundColor: colors.primary,
+    backgroundColor: 'transparent',
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.primary,
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
   permessoBadgeOverrideText: {
-    color: colors.primaryText,
+    color: colors.primary,
     fontSize: 10,
     fontWeight: '700',
   },
@@ -7575,7 +8308,7 @@ const getDynamicStyles = (colors, isRTL) => StyleSheet.create({
   },
   // Variante più larga, per modali con contenuti tabellari (es. Permessi avanzati)
   modalContentWide: {
-    maxWidth: Platform.OS === 'web' ? 820 : 500,
+    maxWidth: Platform.OS === 'web' ? 560 : 500,
   },
   modalHeaderFixed: {
     flexDirection: 'row',

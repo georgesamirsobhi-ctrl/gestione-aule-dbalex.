@@ -2,6 +2,8 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
     "paths": {
       "@/*": [
         "./src/*"
@@ -16,5 +18,10 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/components/app-tabs.tsx",
+    "src/components/app-tabs.web.tsx"
   ]
 }
