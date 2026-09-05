@@ -17,7 +17,6 @@ import {
   signOut
 } from 'firebase/auth';
 import { addDoc, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
-import { getDownloadURL, getMetadata, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -42,7 +41,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as XLSX from 'xlsx';
-import { auth, db, firebaseConfig, storage } from '../config/firebaseConfig';
+import { auth, db, firebaseConfig } from '../config/firebaseConfig';
 import AulaStudioEsportaPanel from '@/components/aula-studio/aula-studio-esporta-panel';
 import AulaStudioImpostazioni from '@/components/aula-studio/aula-studio-impostazioni';
 import AulaStudioResponsabileView from '@/components/aula-studio/aula-studio-responsabile-view';
@@ -79,14 +78,16 @@ const APK_DOWNLOAD_URL = 'https://github.com/georgesamirsobhi-ctrl/gestione-aule
 // Claude — chiunque abbia il link la apre senza bisogno di alcun account.
 const GUIDA_UTENTI_URL = 'https://gestione-aule-dbalex.vercel.app/guida.html';
 
-// Manuale amministrativo (IT/AR): percorso su Firebase Storage dove il
-// gestore può caricare/sostituire il file da Impostazioni → Manuali. Se non
-// è mai stato caricato nulla (storage vuoto), si scarica invece la copia
-// predefinita pubblicata insieme al sito (MANUALE_FALLBACK_URL).
-const MANUALE_STORAGE_PATH = {
-  it: 'manuali/manuale-amministrativo-it.docx',
-  ar: 'manuali/manuale-amministrativo-ar.docx',
-};
+// Manuale amministrativo (IT/AR): il gestore può caricare/sostituire il file
+// da Impostazioni → Manuali. MODIFICATO: salvato dentro Firestore (collezione
+// "manuali", documenti "it"/"ar", contenuto codificato in base64) invece che
+// su Firebase Storage — Storage richiede il piano a pagamento Blaze anche
+// solo per essere attivato, Firestore invece resta nel piano gratuito Spark.
+// Un singolo documento Firestore ha un limite di 1 MiB: con la codifica
+// base64 (+33% circa) il file originale deve restare sotto MANUALE_MAX_BYTES.
+// Se non è mai stato caricato nulla, si scarica invece la copia predefinita
+// pubblicata insieme al sito (MANUALE_FALLBACK_URL).
+const MANUALE_MAX_BYTES = 700 * 1024; // ~700 KB (margine sotto il limite di 1 MiB del documento Firestore)
 const MANUALE_FALLBACK_URL = {
   it: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-it.docx',
   ar: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-ar.docx',
@@ -443,6 +444,7 @@ const t = (key, lang, ...args) => {
       manualiCaricatoConSuccesso: 'File caricato con successo.',
       manualiErroreCaricamento: 'Errore durante il caricamento. Riprova.',
       manualiFormatoNonValido: 'Seleziona un file Word (.doc o .docx).',
+      manualiFileTroppoGrande: 'Il file è troppo grande (massimo 700 KB).',
       manualiVerificaCaricamento: 'Controllo del file caricato…',
       emailVerificata: '✓ Attivo',
       emailNonVerificataBadge: '✕ Email non verificata',
@@ -928,6 +930,7 @@ const t = (key, lang, ...args) => {
       manualiCaricatoConSuccesso: 'تم رفع الملف بنجاح.',
       manualiErroreCaricamento: 'حدث خطأ أثناء الرفع. حاول مرة أخرى.',
       manualiFormatoNonValido: 'اختر ملف Word (.doc أو .docx).',
+      manualiFileTroppoGrande: 'الملف كبير جدًا (الحد الأقصى 700 كيلوبايت).',
       manualiVerificaCaricamento: 'التحقق من الملف المرفوع…',
       emailVerificata: '✓ نشط',
       emailNonVerificataBadge: '✕ لم يتم التحقق من البريد',
@@ -1515,10 +1518,10 @@ export default function App() {
   const [showDownloadChoice, setShowDownloadChoice] = useState(false);
   const [showQrCode, setShowQrCode] = useState(false);
   const [showManualiChoice, setShowManualiChoice] = useState(false);
-  const [manualeInCaricamento, setManualeInCaricamento] = useState(null); // 'it' | 'ar' | null, mostra un piccolo indicatore mentre si cerca l'URL su Storage
+  const [manualeInCaricamento, setManualeInCaricamento] = useState(null); // 'it' | 'ar' | null, mostra un piccolo indicatore mentre si recupera il file da Firestore
 
   // ---- STATI IMPOSTAZIONI → MANUALI (caricamento manuale IT/AR da parte del gestore) ----
-  // manualiMeta[lingua]: undefined = non ancora controllato, false = nessun file caricato, oggetto = metadati Storage (contiene "updated")
+  // manualiMeta[lingua]: undefined = non ancora controllato, false = nessun file caricato, oggetto = documento Firestore (contiene "updatedAt", "fileName", ...)
   const [manualiMeta, setManualiMeta] = useState<Record<string, any>>({});
   const [manualiStato, setManualiStato] = useState<Record<string, string>>({}); // 'uploading' | 'success' | 'error' per lingua
   const [nome, setNome] = useState('');
@@ -1979,14 +1982,40 @@ export default function App() {
   };
 
   // ---- APRE IL MANUALE AMMINISTRATIVO (IT/AR) DALLA SCHERMATA DI ACCESSO ----
-  // Prova prima il file caricato dal gestore su Storage (Impostazioni → Manuali);
-  // se non è mai stato caricato nulla (storage/object-not-found), usa la copia
-  // predefinita pubblicata insieme al sito, così il pulsante funziona comunque.
+  // Prova prima il file caricato dal gestore su Firestore (Impostazioni →
+  // Manuali, collezione "manuali", contenuto in base64); se non è mai stato
+  // caricato nulla, usa la copia predefinita pubblicata insieme al sito.
   const apriManuale = async (linguaManuale) => {
     setManualeInCaricamento(linguaManuale);
     try {
-      const url = await getDownloadURL(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]));
-      await Linking.openURL(url);
+      const snap = await getDoc(doc(db, 'manuali', linguaManuale));
+      const dati = snap.exists() ? snap.data() : null;
+      if (!dati || !dati.base64) throw new Error('manuale non caricato');
+      const nomeFile = dati.fileName || `manuale-amministrativo-${linguaManuale}.docx`;
+      const mime = dati.contentType || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      if (Platform.OS === 'web') {
+        const byteChars = atob(dati.base64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = nomeFile;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      } else {
+        const uri = FileSystem.cacheDirectory + nomeFile;
+        await FileSystem.writeAsStringAsync(uri, dati.base64, { encoding: FileSystem.EncodingType.Base64 });
+        const disponibile = await Sharing.isAvailableAsync();
+        if (disponibile) {
+          await Sharing.shareAsync(uri, { mimeType: mime, dialogTitle: nomeFile });
+        } else {
+          await Linking.openURL(MANUALE_FALLBACK_URL[linguaManuale]);
+        }
+      }
     } catch (e) {
       await Linking.openURL(MANUALE_FALLBACK_URL[linguaManuale]);
     } finally {
@@ -1995,7 +2024,11 @@ export default function App() {
     }
   };
 
-  // ---- IMPOSTAZIONI → MANUALI: carica/sostituisce il manuale IT o AR su Storage ----
+  // ---- IMPOSTAZIONI → MANUALI: carica/sostituisce il manuale IT o AR ----
+  // MODIFICATO: salvato in Firestore (base64), non su Firebase Storage
+  // (Storage richiede il piano a pagamento Blaze anche solo per l'attivazione
+  // iniziale; Firestore resta gratuito). Limite ~700 KB (MANUALE_MAX_BYTES)
+  // per restare sotto il tetto di 1 MiB per documento di Firestore.
   const caricaManuale = (linguaManuale) => {
     if (Platform.OS !== 'web') return;
     const input = document.createElement('input');
@@ -2008,15 +2041,28 @@ export default function App() {
         mostraAlert(t('errore', lang), t('manualiFormatoNonValido', lang));
         return;
       }
+      if (file.size > MANUALE_MAX_BYTES) {
+        mostraAlert(t('errore', lang), t('manualiFileTroppoGrande', lang));
+        return;
+      }
       setManualiStato((s) => ({ ...s, [linguaManuale]: 'uploading' }));
       try {
-        await uploadBytes(
-          storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]),
-          file,
-          { contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
-        );
-        const meta = await getMetadata(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]));
-        setManualiMeta((m) => ({ ...m, [linguaManuale]: meta }));
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const datiManuale = {
+          base64,
+          fileName: file.name,
+          contentType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          size: file.size,
+          updatedAt: new Date().toISOString(),
+          updatedByEmail: user?.email || null,
+        };
+        await setDoc(doc(db, 'manuali', linguaManuale), datiManuale);
+        setManualiMeta((m) => ({ ...m, [linguaManuale]: datiManuale }));
         setManualiStato((s) => ({ ...s, [linguaManuale]: 'success' }));
         registraAttivita(TIPI_REGISTRO.CARICAMENTO_MANUALE, `Manuale amministrativo (${linguaManuale.toUpperCase()}) aggiornato: ${file.name}`);
       } catch (e) {
@@ -3871,8 +3917,8 @@ export default function App() {
     if (impostazioniVista !== 'manuali' || !canGestireManuali) return;
     ['it', 'ar'].forEach((linguaManuale) => {
       if (manualiMeta[linguaManuale] !== undefined) return;
-      getMetadata(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]))
-        .then((meta) => setManualiMeta((m) => ({ ...m, [linguaManuale]: meta })))
+      getDoc(doc(db, 'manuali', linguaManuale))
+        .then((snap) => setManualiMeta((m) => ({ ...m, [linguaManuale]: snap.exists() ? snap.data() : false })))
         .catch(() => setManualiMeta((m) => ({ ...m, [linguaManuale]: false })));
     });
   }, [impostazioniVista, canGestireManuali]);
@@ -6602,7 +6648,7 @@ export default function App() {
                           <Text style={[styles.label, { marginBottom: 4 }]}>{titolo}</Text>
                           {meta === undefined && <Text style={styles.infoTextSmall}>{t('manualiVerificaCaricamento', lang)}</Text>}
                           {meta === false && <Text style={styles.infoTextSmall}>{t('manualiNessunFileCaricato', lang)}</Text>}
-                          {meta && <Text style={styles.infoTextSmall}>{t('manualiUltimoAggiornamento', lang, formattaDataOra(meta.updated, lang))}</Text>}
+                          {meta && <Text style={styles.infoTextSmall}>{t('manualiUltimoAggiornamento', lang, formattaDataOra(meta.updatedAt, lang))}</Text>}
                           {statoCorrente === 'success' && <Text style={[styles.infoTextSmall, { color: colors.success, marginTop: 4 }]}>✓ {t('manualiCaricatoConSuccesso', lang)}</Text>}
                           {statoCorrente === 'error' && <Text style={[styles.infoTextSmall, { color: colors.danger, marginTop: 4 }]}>{t('manualiErroreCaricamento', lang)}</Text>}
                         </View>
