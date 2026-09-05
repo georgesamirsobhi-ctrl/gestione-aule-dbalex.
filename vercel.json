@@ -1,9 +1,4 @@
 {
   "framework": null,
-  "outputDirectory": "public_vercel",
-  "functions": {
-    "api/delete-user.js": {
-      "runtime": "nodejs20.x"
-    }
-  }
+  "outputDirectory": "public_vercel"
 }
