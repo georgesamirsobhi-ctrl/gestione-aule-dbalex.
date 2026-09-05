@@ -89,8 +89,8 @@ const GUIDA_UTENTI_URL = 'https://gestione-aule-dbalex.vercel.app/guida.html';
 // pubblicata insieme al sito (MANUALE_FALLBACK_URL).
 const MANUALE_MAX_BYTES = 700 * 1024; // ~700 KB (margine sotto il limite di 1 MiB del documento Firestore)
 const MANUALE_FALLBACK_URL = {
-  it: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-it.docx',
-  ar: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-ar.docx',
+  it: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-it.pdf',
+  ar: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-ar.pdf',
 };
 
 // ---- COSTANTI ESISTENTI ----
@@ -436,14 +436,14 @@ const t = (key, lang, ...args) => {
       manualiImpostazioniSottotitolo: 'Carica qui i file mostrati nel pulsante "Manuali" della schermata di accesso. Chi non carica nulla, il pulsante mostra comunque la versione predefinita.',
       manualiTitoloIt: 'Manuale Amministrativo — Italiano',
       manualiTitoloAr: 'Manuale Amministrativo — Arabo',
-      manualiCaricaNuovo: 'Carica nuovo file (.docx)',
+      manualiCaricaNuovo: 'Carica nuovo file (.pdf)',
       manualiSostituisci: 'Sostituisci file',
       manualiUltimoAggiornamento: (data) => `Ultimo aggiornamento: ${data}`,
       manualiNessunFileCaricato: 'Nessun file caricato: viene usata la versione predefinita.',
       manualiCaricamentoInCorso: 'Caricamento in corso…',
       manualiCaricatoConSuccesso: 'File caricato con successo.',
       manualiErroreCaricamento: 'Errore durante il caricamento. Riprova.',
-      manualiFormatoNonValido: 'Seleziona un file Word (.doc o .docx).',
+      manualiFormatoNonValido: 'Seleziona un file PDF (.pdf).',
       manualiFileTroppoGrande: 'Il file è troppo grande (massimo 700 KB).',
       manualiVerificaCaricamento: 'Controllo del file caricato…',
       emailVerificata: '✓ Attivo',
@@ -922,14 +922,14 @@ const t = (key, lang, ...args) => {
       manualiImpostazioniSottotitolo: 'ارفع هنا الملفات التي تظهر في زر "الأدلة" بشاشة الدخول. إذا لم يرفع أحد شيئًا، يظهر الزر النسخة الافتراضية تلقائيًا.',
       manualiTitoloIt: 'الدليل الإداري — إيطالي',
       manualiTitoloAr: 'الدليل الإداري — عربي',
-      manualiCaricaNuovo: 'رفع ملف جديد (.docx)',
+      manualiCaricaNuovo: 'رفع ملف جديد (.pdf)',
       manualiSostituisci: 'استبدال الملف',
       manualiUltimoAggiornamento: (data) => `آخر تحديث: ${data}`,
       manualiNessunFileCaricato: 'لم يُرفع أي ملف: تُستخدم النسخة الافتراضية.',
       manualiCaricamentoInCorso: 'جارٍ الرفع…',
       manualiCaricatoConSuccesso: 'تم رفع الملف بنجاح.',
       manualiErroreCaricamento: 'حدث خطأ أثناء الرفع. حاول مرة أخرى.',
-      manualiFormatoNonValido: 'اختر ملف Word (.doc أو .docx).',
+      manualiFormatoNonValido: 'اختر ملف PDF (.pdf).',
       manualiFileTroppoGrande: 'الملف كبير جدًا (الحد الأقصى 700 كيلوبايت).',
       manualiVerificaCaricamento: 'التحقق من الملف المرفوع…',
       emailVerificata: '✓ نشط',
@@ -1991,8 +1991,8 @@ export default function App() {
       const snap = await getDoc(doc(db, 'manuali', linguaManuale));
       const dati = snap.exists() ? snap.data() : null;
       if (!dati || !dati.base64) throw new Error('manuale non caricato');
-      const nomeFile = dati.fileName || `manuale-amministrativo-${linguaManuale}.docx`;
-      const mime = dati.contentType || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const nomeFile = dati.fileName || `manuale-amministrativo-${linguaManuale}.pdf`;
+      const mime = dati.contentType || 'application/pdf';
       if (Platform.OS === 'web') {
         const byteChars = atob(dati.base64);
         const byteNumbers = new Array(byteChars.length);
@@ -2033,11 +2033,11 @@ export default function App() {
     if (Platform.OS !== 'web') return;
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
+    input.accept = '.pdf,application/pdf';
     input.onchange = async (ev: any) => {
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
-      if (!/\.docx?$/i.test(file.name)) {
+      if (!/\.pdf$/i.test(file.name)) {
         mostraAlert(t('errore', lang), t('manualiFormatoNonValido', lang));
         return;
       }
@@ -2056,7 +2056,7 @@ export default function App() {
         const datiManuale = {
           base64,
           fileName: file.name,
-          contentType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          contentType: file.type || 'application/pdf',
           size: file.size,
           updatedAt: new Date().toISOString(),
           updatedByEmail: user?.email || null,
