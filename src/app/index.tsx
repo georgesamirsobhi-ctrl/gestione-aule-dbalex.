@@ -4418,9 +4418,6 @@ export default function App() {
         </View>
         <View style={[styles.headerSideGroup, { justifyContent: isRTL ? 'flex-start' : 'flex-end' }]}>
           <View style={[styles.headerIconsRow, isRTL ? styles.headerIconsRowRTL : styles.headerIconsRowLTR]}>
-            <TouchableOpacity style={styles.langBtnHeader} onPress={() => setShowManualiChoice(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Text style={styles.langTextHeader}>📖</Text>
-            </TouchableOpacity>
             <TouchableOpacity style={styles.langBtnHeader} onPress={() => setLang(lang === 'it' ? 'ar' : 'it')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Text style={styles.langTextHeader}>{lang === 'it' ? 'ع' : 'It'}</Text>
             </TouchableOpacity>
@@ -5416,6 +5413,17 @@ export default function App() {
                       <View style={styles.settingsMenuItemLeft}>
                         <Text style={styles.settingsMenuItemIcon}>🔔</Text>
                         <Text style={styles.settingsMenuItemLabel}>{t('sezioneNotifiche', lang)}</Text>
+                      </View>
+                      <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                    </TouchableOpacity>
+
+                    {/* MODIFICATO: guida interattiva (per tutti) + manuali
+                        amministrativi IT/AR (solo gestore/segreteria/direzione)
+                        — spostato dalla barra in alto qui, dentro Impostazioni */}
+                    <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setShowManualiChoice(true)}>
+                      <View style={styles.settingsMenuItemLeft}>
+                        <Text style={styles.settingsMenuItemIcon}>🧭</Text>
+                        <Text style={styles.settingsMenuItemLabel}>{t('manualiSceltaTitolo', lang)}</Text>
                       </View>
                       <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
                     </TouchableOpacity>
