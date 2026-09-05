@@ -17,6 +17,7 @@ import {
   signOut
 } from 'firebase/auth';
 import { addDoc, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { getDownloadURL, getMetadata, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -41,7 +42,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as XLSX from 'xlsx';
-import { auth, db, firebaseConfig } from '../config/firebaseConfig';
+import { auth, db, firebaseConfig, storage } from '../config/firebaseConfig';
 import AulaStudioEsportaPanel from '@/components/aula-studio/aula-studio-esporta-panel';
 import AulaStudioImpostazioni from '@/components/aula-studio/aula-studio-impostazioni';
 import AulaStudioResponsabileView from '@/components/aula-studio/aula-studio-responsabile-view';
@@ -72,6 +73,24 @@ const LOGO_WATERMARK = require('../../assets/logo-watermark.png');
 // Link fisso: punta sempre all'ultima release pubblicata su GitHub,
 // a patto che il nome del file APK resti identico ad ogni aggiornamento.
 const APK_DOWNLOAD_URL = 'https://github.com/georgesamirsobhi-ctrl/gestione-aule-dbalex./releases/latest/download/application-46bc2bf2-a990-48d0-8dcb-51b876c7336a.apk';
+
+// Guida interattiva IT/AR per studenti, insegnanti e utenti: pagina statica
+// pubblicata sullo stesso sito (cartella /public del progetto), autonoma da
+// Claude — chiunque abbia il link la apre senza bisogno di alcun account.
+const GUIDA_UTENTI_URL = 'https://gestione-aule-dbalex.vercel.app/guida.html';
+
+// Manuale amministrativo (IT/AR): percorso su Firebase Storage dove il
+// gestore può caricare/sostituire il file da Impostazioni → Manuali. Se non
+// è mai stato caricato nulla (storage vuoto), si scarica invece la copia
+// predefinita pubblicata insieme al sito (MANUALE_FALLBACK_URL).
+const MANUALE_STORAGE_PATH = {
+  it: 'manuali/manuale-amministrativo-it.docx',
+  ar: 'manuali/manuale-amministrativo-ar.docx',
+};
+const MANUALE_FALLBACK_URL = {
+  it: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-it.docx',
+  ar: 'https://gestione-aule-dbalex.vercel.app/manuali/manuale-amministrativo-ar.docx',
+};
 
 // ---- COSTANTI ESISTENTI ----
 const SEZIONI_INIZIALI = ['Scuola Base', 'Scuola Media', 'Scuola Professionale', 'Comuni'];
@@ -198,8 +217,19 @@ const puoGestireClassi = (ruolo) =>
 const puoCreareRuoliPersonalizzati = (ruolo) => 
   ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 
-const puoAssegnarePermessiRuoliPersonalizzati = (ruolo) => 
+const puoAssegnarePermessiRuoliPersonalizzati = (ruolo) =>
   ruolo === 'gestore';
+
+// Carica/sostituisce i due manuali amministrativi (IT/AR) mostrati come
+// download nella schermata di accesso — riservato al gestore, come il reset dati.
+const puoGestireManuali = (ruolo) => ruolo === 'gestore';
+
+// Vede i due manuali amministrativi (IT/AR) come scelte di download nel
+// pulsante "Manuali": gestore + staff di segreteria/direzione, che sono già
+// gli stessi ruoli che gestiscono utenti e prenotazioni. Tutti gli altri
+// ruoli (studenti, insegnanti, TEVT, utente generico) vedono nello stesso
+// pulsante solo la guida interattiva, non i manuali amministrativi.
+const puoVedereManualiAmministrativi = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 
 // Configurazione righe della tabella permessi (Impostazioni Avanzate).
 // Ogni riga rappresenta un singolo permesso, raggruppato per categoria.
@@ -219,7 +249,9 @@ const RIGHE_TABELLA_PERMESSI = [
   { categoriaKey: 'classi', permessoKey: 'puoGestireClassi', label: 'Gestire le classi (in Impostazioni)', labelAr: 'إدارة الفصول (في الإعدادات)', defaultFn: puoGestireClassi },
   { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoCreareRuoliPersonalizzati', label: 'Creare ruoli personalizzati (in Aggiungi Utente)', labelAr: 'إنشاء أدوار مخصّصة (في إضافة مستخدم)', defaultFn: puoCreareRuoliPersonalizzati },
   { categoriaKey: 'sezRuoliPersonalizzati', permessoKey: 'puoAssegnarePermessiRuoliPersonalizzati', label: 'Assegnare permessi a ruoli personalizzati', labelAr: 'تعيين صلاحيات للأدوار المخصّصة', defaultFn: puoAssegnarePermessiRuoliPersonalizzati },
-  { categoriaKey: 'sezAulaStudio', permessoKey: 'puoGestireAulaStudio', label: 'Gestire Aula Studio (appello, pallini, sanzioni, impostazioni)', labelAr: 'إدارة قاعة الدراسة (الحضور، النقاط، العقوبات، الإعدادات)', defaultFn: puoGestireAulaStudio }
+  { categoriaKey: 'sezAulaStudio', permessoKey: 'puoGestireAulaStudio', label: 'Gestire Aula Studio (appello, pallini, sanzioni, impostazioni)', labelAr: 'إدارة قاعة الدراسة (الحضور، النقاط، العقوبات، الإعدادات)', defaultFn: puoGestireAulaStudio },
+  { categoriaKey: 'sezManuali', permessoKey: 'puoGestireManuali', label: 'Caricare i manuali amministrativi (IT/AR) mostrati nella schermata di accesso', labelAr: 'رفع الأدلة الإدارية (إيطالي/عربي) الظاهرة في شاشة الدخول', defaultFn: puoGestireManuali },
+  { categoriaKey: 'sezManuali', permessoKey: 'puoVedereManualiAmministrativi', label: 'Vedere i manuali amministrativi (IT/AR) tra le scelte del pulsante "Manuali"', labelAr: 'رؤية الأدلة الإدارية (إيطالي/عربي) ضمن خيارات زر "الأدلة"', defaultFn: puoVedereManualiAmministrativi }
 ];
 
 const NOMI_MESI = {
@@ -394,6 +426,24 @@ const t = (key, lang, ...args) => {
       colonnaStatoEmail: 'Stato',
       scaricaAppAndroidTitolo: 'Preferisci l\'app? Scaricala per Android',
       scaricaAppAndroidPulsante: '📱 Scarica app Android (.apk)',
+      manualiPulsanteLogin: 'Manuali',
+      manualiSceltaTitolo: 'Manuali e guide',
+      manualiGuidaInterattiva: 'Guida interattiva (Studenti, Insegnanti, Utenti)',
+      manualiScaricaAmminIt: 'Manuale Amministrativo (Italiano)',
+      manualiScaricaAmminAr: 'Manuale Amministrativo (Arabo)',
+      menuManuali: 'Manuali',
+      manualiImpostazioniSottotitolo: 'Carica qui i file mostrati nel pulsante "Manuali" della schermata di accesso. Chi non carica nulla, il pulsante mostra comunque la versione predefinita.',
+      manualiTitoloIt: 'Manuale Amministrativo — Italiano',
+      manualiTitoloAr: 'Manuale Amministrativo — Arabo',
+      manualiCaricaNuovo: 'Carica nuovo file (.docx)',
+      manualiSostituisci: 'Sostituisci file',
+      manualiUltimoAggiornamento: (data) => `Ultimo aggiornamento: ${data}`,
+      manualiNessunFileCaricato: 'Nessun file caricato: viene usata la versione predefinita.',
+      manualiCaricamentoInCorso: 'Caricamento in corso…',
+      manualiCaricatoConSuccesso: 'File caricato con successo.',
+      manualiErroreCaricamento: 'Errore durante il caricamento. Riprova.',
+      manualiFormatoNonValido: 'Seleziona un file Word (.doc o .docx).',
+      manualiVerificaCaricamento: 'Controllo del file caricato…',
       emailVerificata: '✓ Attivo',
       emailNonVerificataBadge: '✕ Email non verificata',
       invitoInAttesa: '⏳ Invito in attesa',
@@ -681,6 +731,7 @@ const t = (key, lang, ...args) => {
       sezEsportazione: 'Esportazione',
       sezRuoliPersonalizzati: 'Ruoli Personalizzati',
       sezAulaStudio: 'Aula Studio',
+      sezManuali: 'Manuali',
 
       // ---- AULA STUDIO ----
       navAulaStudio: 'Aula Studio',
@@ -860,6 +911,24 @@ const t = (key, lang, ...args) => {
       colonnaStatoEmail: 'الحالة',
       scaricaAppAndroidTitolo: 'تفضل التطبيق؟ حمّله لنظام أندرويد',
       scaricaAppAndroidPulsante: '📱 تحميل تطبيق أندرويد (.apk)',
+      manualiPulsanteLogin: 'الأدلة',
+      manualiSceltaTitolo: 'الأدلة والدلائل الإرشادية',
+      manualiGuidaInterattiva: 'الدليل التفاعلي (الطلاب، المعلمون، المستخدمون)',
+      manualiScaricaAmminIt: 'الدليل الإداري (إيطالي)',
+      manualiScaricaAmminAr: 'الدليل الإداري (عربي)',
+      menuManuali: 'الأدلة',
+      manualiImpostazioniSottotitolo: 'ارفع هنا الملفات التي تظهر في زر "الأدلة" بشاشة الدخول. إذا لم يرفع أحد شيئًا، يظهر الزر النسخة الافتراضية تلقائيًا.',
+      manualiTitoloIt: 'الدليل الإداري — إيطالي',
+      manualiTitoloAr: 'الدليل الإداري — عربي',
+      manualiCaricaNuovo: 'رفع ملف جديد (.docx)',
+      manualiSostituisci: 'استبدال الملف',
+      manualiUltimoAggiornamento: (data) => `آخر تحديث: ${data}`,
+      manualiNessunFileCaricato: 'لم يُرفع أي ملف: تُستخدم النسخة الافتراضية.',
+      manualiCaricamentoInCorso: 'جارٍ الرفع…',
+      manualiCaricatoConSuccesso: 'تم رفع الملف بنجاح.',
+      manualiErroreCaricamento: 'حدث خطأ أثناء الرفع. حاول مرة أخرى.',
+      manualiFormatoNonValido: 'اختر ملف Word (.doc أو .docx).',
+      manualiVerificaCaricamento: 'التحقق من الملف المرفوع…',
       emailVerificata: '✓ نشط',
       emailNonVerificataBadge: '✕ لم يتم التحقق من البريد',
       invitoInAttesa: '⏳ دعوة قيد الانتظار',
@@ -1147,6 +1216,7 @@ const t = (key, lang, ...args) => {
       sezEsportazione: 'التصدير',
       sezRuoliPersonalizzati: 'الأدوار المخصصة',
       sezAulaStudio: 'قاعة الدراسة',
+      sezManuali: 'الأدلة',
 
       // ---- AULA STUDIO (عربي) ----
       navAulaStudio: 'قاعة الدراسة',
@@ -1420,7 +1490,8 @@ const TIPI_REGISTRO = {
   ELIMINAZIONE_CLASSE: 'eliminazione_classe',
   CREAZIONE_SEGNALAZIONE: 'creazione_segnalazione',
   PRESA_IN_CARICO_SEGNALAZIONE: 'presa_in_carico_segnalazione',
-  RISOLUZIONE_SEGNALAZIONE: 'risoluzione_segnalazione'
+  RISOLUZIONE_SEGNALAZIONE: 'risoluzione_segnalazione',
+  CARICAMENTO_MANUALE: 'caricamento_manuale'
 };
 
 export default function App() {
@@ -1443,6 +1514,13 @@ export default function App() {
   const [mostraPassword, setMostraPassword] = useState(false);
   const [showDownloadChoice, setShowDownloadChoice] = useState(false);
   const [showQrCode, setShowQrCode] = useState(false);
+  const [showManualiChoice, setShowManualiChoice] = useState(false);
+  const [manualeInCaricamento, setManualeInCaricamento] = useState(null); // 'it' | 'ar' | null, mostra un piccolo indicatore mentre si cerca l'URL su Storage
+
+  // ---- STATI IMPOSTAZIONI → MANUALI (caricamento manuale IT/AR da parte del gestore) ----
+  // manualiMeta[lingua]: undefined = non ancora controllato, false = nessun file caricato, oggetto = metadati Storage (contiene "updated")
+  const [manualiMeta, setManualiMeta] = useState<Record<string, any>>({});
+  const [manualiStato, setManualiStato] = useState<Record<string, string>>({}); // 'uploading' | 'success' | 'error' per lingua
   const [nome, setNome] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1898,6 +1976,55 @@ export default function App() {
     } catch (e) {
       mostraAlert(t('errore', lang), e.code + ': ' + e.message);
     }
+  };
+
+  // ---- APRE IL MANUALE AMMINISTRATIVO (IT/AR) DALLA SCHERMATA DI ACCESSO ----
+  // Prova prima il file caricato dal gestore su Storage (Impostazioni → Manuali);
+  // se non è mai stato caricato nulla (storage/object-not-found), usa la copia
+  // predefinita pubblicata insieme al sito, così il pulsante funziona comunque.
+  const apriManuale = async (linguaManuale) => {
+    setManualeInCaricamento(linguaManuale);
+    try {
+      const url = await getDownloadURL(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]));
+      await Linking.openURL(url);
+    } catch (e) {
+      await Linking.openURL(MANUALE_FALLBACK_URL[linguaManuale]);
+    } finally {
+      setManualeInCaricamento(null);
+      setShowManualiChoice(false);
+    }
+  };
+
+  // ---- IMPOSTAZIONI → MANUALI: carica/sostituisce il manuale IT o AR su Storage ----
+  const caricaManuale = (linguaManuale) => {
+    if (Platform.OS !== 'web') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
+    input.onchange = async (ev: any) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      if (!/\.docx?$/i.test(file.name)) {
+        mostraAlert(t('errore', lang), t('manualiFormatoNonValido', lang));
+        return;
+      }
+      setManualiStato((s) => ({ ...s, [linguaManuale]: 'uploading' }));
+      try {
+        await uploadBytes(
+          storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]),
+          file,
+          { contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
+        );
+        const meta = await getMetadata(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]));
+        setManualiMeta((m) => ({ ...m, [linguaManuale]: meta }));
+        setManualiStato((s) => ({ ...s, [linguaManuale]: 'success' }));
+        registraAttivita(TIPI_REGISTRO.CARICAMENTO_MANUALE, `Manuale amministrativo (${linguaManuale.toUpperCase()}) aggiornato: ${file.name}`);
+      } catch (e) {
+        console.warn('Errore caricamento manuale:', e);
+        setManualiStato((s) => ({ ...s, [linguaManuale]: 'error' }));
+      }
+    };
+    input.click();
   };
 
   // ---- CONTROLLA SE EMAIL È STATA VERIFICATA ----
@@ -3736,6 +3863,19 @@ export default function App() {
   const canCreareRuoliPersonalizzati = haPermesso(currentUserData, 'puoCreareRuoliPersonalizzati', puoCreareRuoliPersonalizzati);
   const canAssegnarePermessiRuoliPersonalizzati = haPermesso(currentUserData, 'puoAssegnarePermessiRuoliPersonalizzati', puoAssegnarePermessiRuoliPersonalizzati);
   const canGestireAulaStudio = haPermesso(currentUserData, 'puoGestireAulaStudio', puoGestireAulaStudio);
+  const canGestireManuali = haPermesso(currentUserData, 'puoGestireManuali', puoGestireManuali) && Platform.OS === 'web';
+  const canVedereManualiAmministrativi = haPermesso(currentUserData, 'puoVedereManualiAmministrativi', puoVedereManualiAmministrativi);
+  // Controlla, alla prima apertura della schermata Impostazioni → Manuali, se esiste già
+  // un file caricato per ciascuna lingua (per mostrare data ultimo aggiornamento o "nessun file").
+  useEffect(() => {
+    if (impostazioniVista !== 'manuali' || !canGestireManuali) return;
+    ['it', 'ar'].forEach((linguaManuale) => {
+      if (manualiMeta[linguaManuale] !== undefined) return;
+      getMetadata(storageRef(storage, MANUALE_STORAGE_PATH[linguaManuale]))
+        .then((meta) => setManualiMeta((m) => ({ ...m, [linguaManuale]: meta })))
+        .catch(() => setManualiMeta((m) => ({ ...m, [linguaManuale]: false })));
+    });
+  }, [impostazioniVista, canGestireManuali]);
   // Se l'utente entra in Impostazioni → Esporta ma può esportare solo l'Aula Studio (es. segreteria
   // senza gli altri permessi di export), sposta automaticamente la scheda selezionata su "Aula Studio".
   useEffect(() => {
@@ -4232,6 +4372,12 @@ export default function App() {
         </View>
         <View style={[styles.headerSideGroup, { justifyContent: isRTL ? 'flex-start' : 'flex-end' }]}>
           <View style={[styles.headerIconsRow, isRTL ? styles.headerIconsRowRTL : styles.headerIconsRowLTR]}>
+            <TouchableOpacity style={styles.langBtnHeader} onPress={() => setShowManualiChoice(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.langTextHeader}>📖</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.langBtnHeader} onPress={() => setLang(lang === 'it' ? 'ar' : 'it')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.langTextHeader}>{lang === 'it' ? 'ع' : 'It'}</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.langBtnHeader} onPress={() => setModalNotifiche(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Text style={styles.langTextHeader}>🔔</Text>
               {notificheNonLette > 0 && (
@@ -4246,6 +4392,57 @@ export default function App() {
           </View>
         </View>
       </View>
+
+      {/* ==========================================================
+          MODALE MANUALI (guida interattiva per tutti; download IT/AR
+          dei manuali amministrativi solo per gestore/segreteria/direzione)
+          ========================================================== */}
+      <Modal
+        visible={showManualiChoice}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowManualiChoice(false)}
+      >
+        <View style={qrStyles.overlay}>
+          <View style={qrStyles.box}>
+            <Text style={qrStyles.title}>{t('manualiSceltaTitolo', lang)}</Text>
+            <TouchableOpacity
+              style={qrStyles.choiceBtn}
+              onPress={() => { Linking.openURL(GUIDA_UTENTI_URL); setShowManualiChoice(false); }}
+            >
+              <Text style={qrStyles.choiceBtnText}>🧭 {t('manualiGuidaInterattiva', lang)}</Text>
+            </TouchableOpacity>
+            {canVedereManualiAmministrativi && (
+              <>
+                <TouchableOpacity
+                  style={qrStyles.choiceBtn}
+                  onPress={() => apriManuale('it')}
+                  disabled={!!manualeInCaricamento}
+                >
+                  {manualeInCaricamento === 'it'
+                    ? <ActivityIndicator color={colors.primary} />
+                    : <Text style={qrStyles.choiceBtnText}>📄 {t('manualiScaricaAmminIt', lang)}</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={qrStyles.choiceBtn}
+                  onPress={() => apriManuale('ar')}
+                  disabled={!!manualeInCaricamento}
+                >
+                  {manualeInCaricamento === 'ar'
+                    ? <ActivityIndicator color={colors.primary} />
+                    : <Text style={qrStyles.choiceBtnText}>📄 {t('manualiScaricaAmminAr', lang)}</Text>}
+                </TouchableOpacity>
+              </>
+            )}
+            <TouchableOpacity
+              style={qrStyles.closeBtn}
+              onPress={() => setShowManualiChoice(false)}
+            >
+              <Text style={qrStyles.closeBtnText}>{t('annulla', lang)}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* ==========================================================
           MODALE NOTIFICHE
@@ -5222,6 +5419,16 @@ export default function App() {
                         <View style={styles.settingsMenuItemLeft}>
                           <Text style={styles.settingsMenuItemIcon}>🔧</Text>
                           <Text style={styles.settingsMenuItemLabel}>{t('impostazioniAvanzate', lang)}</Text>
+                        </View>
+                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {canGestireManuali && (
+                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('manuali')}>
+                        <View style={styles.settingsMenuItemLeft}>
+                          <Text style={styles.settingsMenuItemIcon}>📖</Text>
+                          <Text style={styles.settingsMenuItemLabel}>{t('menuManuali', lang)}</Text>
                         </View>
                         <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
                       </TouchableOpacity>
@@ -6379,6 +6586,40 @@ export default function App() {
                   </>
                 );
               })()}
+
+              {/* Sottovista: Manuali (caricamento manuale amministrativo IT/AR, solo gestore/web) */}
+              {impostazioniVista === 'manuali' && canGestireManuali && (
+                <View style={styles.resetPanelCard}>
+                  <Text style={[styles.aulaTitle, { color: colors.primary, marginBottom: 6 }]}>{t('menuManuali', lang)}</Text>
+                  <Text style={[styles.infoTextSmall, { marginBottom: 18, fontSize: 13 }]}>{t('manualiImpostazioniSottotitolo', lang)}</Text>
+
+                  {[{ chiave: 'it', titolo: t('manualiTitoloIt', lang) }, { chiave: 'ar', titolo: t('manualiTitoloAr', lang) }].map(({ chiave: linguaManuale, titolo }) => {
+                    const meta = manualiMeta[linguaManuale];
+                    const statoCorrente = manualiStato[linguaManuale];
+                    return (
+                      <View key={linguaManuale} style={[styles.manualeUploadRow, { borderColor: colors.border }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.label, { marginBottom: 4 }]}>{titolo}</Text>
+                          {meta === undefined && <Text style={styles.infoTextSmall}>{t('manualiVerificaCaricamento', lang)}</Text>}
+                          {meta === false && <Text style={styles.infoTextSmall}>{t('manualiNessunFileCaricato', lang)}</Text>}
+                          {meta && <Text style={styles.infoTextSmall}>{t('manualiUltimoAggiornamento', lang, formattaDataOra(meta.updated, lang))}</Text>}
+                          {statoCorrente === 'success' && <Text style={[styles.infoTextSmall, { color: colors.success, marginTop: 4 }]}>✓ {t('manualiCaricatoConSuccesso', lang)}</Text>}
+                          {statoCorrente === 'error' && <Text style={[styles.infoTextSmall, { color: colors.danger, marginTop: 4 }]}>{t('manualiErroreCaricamento', lang)}</Text>}
+                        </View>
+                        <TouchableOpacity
+                          style={styles.addButton}
+                          onPress={() => caricaManuale(linguaManuale)}
+                          disabled={statoCorrente === 'uploading'}
+                        >
+                          {statoCorrente === 'uploading'
+                            ? <ActivityIndicator color={colors.primaryText} />
+                            : <Text style={styles.addButtonText}>{meta ? t('manualiSostituisci', lang) : t('manualiCaricaNuovo', lang)}</Text>}
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
 
               {/* Sottovista: Impostazioni Avanzate */}
               {impostazioniVista === 'avanzate' && (
@@ -7563,10 +7804,17 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
   },
   authBackground: { flex: 1, width: '100%' },
   authWatermarkWrap: {
+    // MODIFICATO: era centrato a schermo intero (alignItems/justifyContent:
+    // 'center'), il che lo faceva finire esattamente dietro ai campi
+    // Email/Password (anch'essi centrati nella metà inferiore dello
+    // schermo), dando l'impressione che il logo fosse "incollato" alle
+    // caselle di accesso. Ora è ancorato in alto, nell'area del titolo, ben
+    // sopra al modulo di login.
     ...StyleSheet.absoluteFill,
     backgroundColor: colors.bg,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: '12%',
   },
   authWatermarkFixed: {
     width: 220,
@@ -7967,6 +8215,13 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
     maxWidth: 720,
     width: '100%',
     ...softShadow(colors, 0.05, 6, 2),
+  },
+  manualeUploadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    borderTopWidth: 1,
   },
 
   // ---- Tabelle ----

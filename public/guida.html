@@ -1,0 +1,600 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Guida GestioneAule</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=Amiri:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --bg:#F4F6F9;
+    --surface:#FFFFFF;
+    --surface-alt:#EAEEF3;
+    --border:#D9E0E8;
+    --ink:#1B2430;
+    --ink-soft:#5B6572;
+    --navy:#1F3B57;
+    --navy-2:#2E5075;
+    --gold:#93711F;
+    --gold-soft:#F4E9D2;
+    --good:#1E7A55;
+    --good-soft:#DFF3E9;
+    --warn:#A6431D;
+    --warn-soft:#FBE6DA;
+    --danger:#B23A3A;
+    --danger-soft:#FBE2E2;
+    --radius-s:8px;
+    --radius-m:14px;
+    --shadow: 0 1px 2px rgba(27,36,48,.06), 0 8px 24px -12px rgba(27,36,48,.12);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#10161F;
+      --surface:#161E2A;
+      --surface-alt:#1C2531;
+      --border:#2A3546;
+      --ink:#E8EDF4;
+      --ink-soft:#9AA8B8;
+      --navy:#8FB0D6;
+      --navy-2:#AAC6E6;
+      --gold:#E0BB63;
+      --gold-soft:#2B2416;
+      --good:#5FCB9B;
+      --good-soft:#153327;
+      --warn:#E28A5C;
+      --warn-soft:#33200F;
+      --danger:#E68080;
+      --danger-soft:#3A1C1C;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px -14px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#10161F;
+    --surface:#161E2A;
+    --surface-alt:#1C2531;
+    --border:#2A3546;
+    --ink:#E8EDF4;
+    --ink-soft:#9AA8B8;
+    --navy:#8FB0D6;
+    --navy-2:#AAC6E6;
+    --gold:#E0BB63;
+    --gold-soft:#2B2416;
+    --good:#5FCB9B;
+    --good-soft:#153327;
+    --warn:#E28A5C;
+    --warn-soft:#33200F;
+    --danger:#E68080;
+    --danger-soft:#3A1C1C;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px -14px rgba(0,0,0,.55);
+  }
+
+  *{box-sizing:border-box;}
+  body{background:var(--bg); color:var(--ink); margin:0;}
+
+  #app{
+    --f-display:'Fraunces', 'Amiri', serif;
+    --f-body:'Work Sans', 'IBM Plex Sans Arabic', sans-serif;
+    font-family:var(--f-body);
+    color:var(--ink);
+    background:var(--bg);
+    min-height:100%;
+    line-height:1.6;
+  }
+  #app[lang="ar"]{
+    --f-display:'Amiri', 'Fraunces', serif;
+    --f-body:'IBM Plex Sans Arabic', 'Work Sans', sans-serif;
+  }
+  #app[dir="rtl"] .fasce-grid{ direction:rtl; }
+
+  h1,h2,h3{ font-family:var(--f-display); font-weight:600; text-wrap:balance; color:var(--navy); margin:0; }
+  a{ color:var(--navy-2); }
+  ::selection{ background:var(--gold-soft); }
+
+  /* ---------- header ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:16px; padding:14px 22px;
+    background:var(--surface); border-bottom:1px solid var(--border);
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand-mark{
+    width:38px; height:38px; border-radius:10px;
+    background:linear-gradient(155deg, var(--navy), var(--navy-2));
+    display:flex; align-items:center; justify-content:center;
+    color:#fff; font-family:var(--f-display); font-weight:700; font-size:17px; flex:none;
+  }
+  .brand-text h1{ font-size:1.02rem; line-height:1.15; }
+  .brand-text p{ margin:2px 0 0; font-size:.78rem; color:var(--ink-soft); }
+
+  .lang-switch{
+    display:flex; background:var(--surface-alt); border:1px solid var(--border);
+    border-radius:999px; padding:3px; gap:2px; flex:none;
+  }
+  .lang-switch button{
+    appearance:none; border:0; background:transparent; cursor:pointer;
+    padding:7px 14px; border-radius:999px; font:600 .8rem var(--f-body);
+    color:var(--ink-soft); letter-spacing:.02em;
+  }
+  .lang-switch button[aria-pressed="true"]{ background:var(--navy); color:#fff; }
+  .lang-switch button:focus-visible{ outline:2px solid var(--navy-2); outline-offset:2px; }
+
+  /* ---------- shell ---------- */
+  .shell{ display:flex; align-items:flex-start; max-width:1180px; margin:0 auto; }
+  nav.toc{
+    position:sticky; top:65px; flex:none; width:250px;
+    padding:26px 14px 40px; max-height:calc(100vh - 65px); overflow-y:auto;
+  }
+  nav.toc .toc-group{ margin-bottom:18px; }
+  nav.toc .toc-label{
+    font:700 .68rem var(--f-body); text-transform:uppercase; letter-spacing:.08em;
+    color:var(--ink-soft); padding:0 12px 6px;
+  }
+  nav.toc a{
+    display:flex; align-items:center; gap:8px;
+    padding:7px 12px; border-radius:var(--radius-s);
+    color:var(--ink); text-decoration:none; font-size:.86rem;
+    border-inline-start:2px solid transparent;
+  }
+  nav.toc a:hover{ background:var(--surface-alt); }
+  nav.toc a.active{ background:var(--gold-soft); color:var(--gold); border-inline-start-color:var(--gold); font-weight:600; }
+
+  main{ flex:1; min-width:0; padding:30px 26px 90px; }
+  .content-col{ max-width:700px; }
+  #app[dir="rtl"] .content-col{ margin-inline-start:auto; }
+
+  .hero{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-m);
+    padding:26px 28px; margin-bottom:34px; box-shadow:var(--shadow);
+  }
+  .hero h2{ font-size:1.4rem; margin-bottom:8px; }
+  .hero p{ margin:0; color:var(--ink-soft); max-width:60ch; }
+
+  section.doc-section{ margin-bottom:44px; scroll-margin-top:80px; }
+  section.doc-section .sec-head{
+    display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+    border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:16px;
+  }
+  section.doc-section h2{ font-size:1.22rem; }
+  .role-tags{ display:flex; gap:6px; flex-wrap:wrap; }
+  .role-tag{
+    font:600 .68rem var(--f-body); letter-spacing:.03em; text-transform:uppercase;
+    padding:3px 9px; border-radius:999px; background:var(--surface-alt); color:var(--ink-soft);
+    border:1px solid var(--border);
+  }
+  .role-tag.tutti{ background:var(--navy); color:#fff; border-color:var(--navy); }
+  .role-tag.studente{ background:var(--good-soft); color:var(--good); border-color:transparent; }
+  .role-tag.insegnante{ background:var(--gold-soft); color:var(--gold); border-color:transparent; }
+
+  h3.sub{ font-size:1rem; margin:22px 0 8px; color:var(--ink); font-weight:600; font-family:var(--f-body); }
+  p.body-p{ margin:0 0 14px; color:var(--ink); max-width:66ch; }
+  p.body-p:last-child{ margin-bottom:0; }
+
+  ol.steps{ margin:0 0 16px; padding:0; list-style:none; counter-reset:step; display:flex; flex-direction:column; gap:10px; }
+  ol.steps li{
+    counter-increment:step; display:flex; gap:12px; align-items:flex-start;
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-s);
+    padding:11px 14px;
+  }
+  ol.steps li::before{
+    content:counter(step); flex:none; width:24px; height:24px; border-radius:50%;
+    background:var(--navy); color:#fff; font:700 .74rem var(--f-body);
+    display:flex; align-items:center; justify-content:center; margin-top:1px;
+  }
+  ol.steps li span{ color:var(--ink); }
+
+  ul.plain{ margin:0 0 16px; padding-inline-start:20px; display:flex; flex-direction:column; gap:7px; }
+  ul.plain li{ color:var(--ink); }
+
+  .chip-row{ display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 18px; }
+  .ui-chip{
+    font:600 .82rem var(--f-body); padding:8px 15px; border-radius:9px;
+    display:inline-flex; align-items:center; gap:6px; line-height:1.2;
+  }
+  .ui-chip.primary{ background:var(--navy); color:#fff; }
+  .ui-chip.outline{ background:transparent; color:var(--navy); border:1.5px solid var(--navy); }
+  .ui-chip.field{ background:var(--surface-alt); color:var(--ink); border:1px solid var(--border); font-weight:500; }
+  #app[lang="ar"] .ui-chip.outline{ color:var(--navy-2); border-color:var(--navy-2); }
+
+  .badge-row{ display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 18px; }
+  .status-badge{ font:600 .78rem var(--f-body); padding:5px 12px; border-radius:999px; }
+  .status-badge.good{ background:var(--good-soft); color:var(--good); }
+  .status-badge.warn{ background:var(--warn-soft); color:var(--warn); }
+  .status-badge.danger{ background:var(--danger-soft); color:var(--danger); }
+  .status-badge.neutral{ background:var(--surface-alt); color:var(--ink-soft); border:1px solid var(--border); }
+
+  .callout{
+    display:flex; gap:11px; padding:13px 16px; border-radius:var(--radius-s);
+    margin:6px 0 18px; border:1px solid transparent;
+  }
+  .callout .ic{ flex:none; font-size:1.05rem; line-height:1.4; }
+  .callout p{ margin:0; font-size:.9rem; }
+  .callout.tip{ background:var(--good-soft); color:var(--good); }
+  .callout.warn{ background:var(--warn-soft); color:var(--warn); }
+
+  .legend-row{ display:flex; flex-wrap:wrap; gap:16px; margin:2px 0 16px; }
+  .legend-item{ display:flex; align-items:center; gap:7px; font-size:.86rem; color:var(--ink-soft); }
+  .legend-dot{ width:10px; height:10px; border-radius:50%; flex:none; }
+  .legend-dot.good{ background:var(--good); }
+  .legend-dot.danger{ background:var(--danger); }
+
+  .fasce-grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(84px,1fr)); gap:7px;
+    margin:10px 0 12px; max-width:560px;
+  }
+  .fasce-grid .fslot{
+    border:1px solid var(--border); background:var(--surface-alt); border-radius:7px;
+    padding:7px 4px; text-align:center; font:600 .74rem var(--f-body); color:var(--ink);
+    font-variant-numeric:tabular-nums;
+  }
+  .fasce-grid .fslot.locked{ background:var(--danger-soft); color:var(--danger); border-color:transparent; }
+  .fasce-grid .fslot.past{ background:var(--surface); color:var(--ink-soft); text-decoration:line-through; opacity:.7; }
+
+  footer.doc-footer{
+    border-top:1px solid var(--border); margin-top:20px; padding-top:18px;
+    color:var(--ink-soft); font-size:.8rem; max-width:700px;
+  }
+
+  @media (max-width: 880px){
+    .shell{ flex-direction:column; }
+    nav.toc{
+      position:static; width:100%; max-height:none; overflow:visible;
+      display:flex; gap:6px; padding:14px 18px; border-bottom:1px solid var(--border);
+      overflow-x:auto;
+    }
+    nav.toc .toc-group{ display:flex; gap:6px; margin:0; align-items:center; }
+    nav.toc .toc-label{ display:none; }
+    nav.toc a{ white-space:nowrap; border-inline-start:0; border:1px solid var(--border); }
+    nav.toc a.active{ border-color:var(--gold); }
+    main{ padding:22px 18px 70px; }
+  }
+</style>
+
+<div id="app" dir="ltr" lang="it">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">GA</div>
+      <div class="brand-text">
+        <h1 data-t="appTitle"></h1>
+        <p data-t="appSubtitle"></p>
+      </div>
+    </div>
+    <div class="lang-switch" role="group" aria-label="Lingua / اللغة">
+      <button type="button" data-lang-btn="it">Italiano</button>
+      <button type="button" data-lang-btn="ar">العربية</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="toc" id="toc" aria-label="Indice"></nav>
+    <main>
+      <div class="content-col">
+        <div class="hero">
+          <h2 data-t="heroTitle"></h2>
+          <p data-t="heroBody"></p>
+        </div>
+        <div id="sections"></div>
+        <footer class="doc-footer" data-t="footerNote"></footer>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var UI = {
+    it: {
+      appTitle: "Guida GestioneAule",
+      appSubtitle: "Per studenti, insegnanti e utenti",
+      heroTitle: "Come si usa Gestione Aule DBALEX",
+      heroBody: "Questa guida raccoglie in un unico posto le funzioni che uno studente, un insegnante o un utente generale incontra nell'app: accesso, prenotazione delle aule, segnalazione guasti, notifiche e il modulo Aula Studio. La gestione amministrativa (utenti, sezioni, permessi) è descritta in un manuale separato per lo staff.",
+      footerNote: "Guida utenti · Gestione Aule DBALEX · versione settembre 2026",
+      tocAll: "Per tutti",
+      tocStudenti: "Aula Studio",
+      roleTutti: "Tutti",
+      roleStudente: "Studente",
+      roleInsegnante: "Insegnante"
+    },
+    ar: {
+      appTitle: "دليل Gestione Aule",
+      appSubtitle: "للطلاب والمعلمين والمستخدمين",
+      heroTitle: "كيفية استخدام تطبيق Gestione Aule DBALEX",
+      heroBody: "يجمع هذا الدليل في مكان واحد الوظائف التي يستخدمها الطالب أو المعلم أو المستخدم العام في التطبيق: الدخول، حجز القاعات، الإبلاغ عن الأعطال، الإشعارات، ووحدة قاعة الدراسة. الإدارة (المستخدمون، الأقسام، الصلاحيات) موضحة في دليل منفصل مخصص للطاقم الإداري.",
+      footerNote: "دليل المستخدمين · Gestione Aule DBALEX · إصدار سبتمبر 2026",
+      tocAll: "للجميع",
+      tocStudenti: "قاعة الدراسة",
+      roleTutti: "الجميع",
+      roleStudente: "طالب",
+      roleInsegnante: "معلم"
+    }
+  };
+
+  var SECTIONS = [
+    {
+      id: "accesso", group: "all",
+      title: { it: "1. Accesso e primo utilizzo", ar: "١. الدخول والاستخدام الأول" },
+      roles: ["tutti"],
+      blocks: [
+        { t:"p", it:"Si accede con email e password. Se il tuo account è stato creato manualmente da un gestore, riceverai un'email per impostare subito la password: in questo caso non serve confermare l'email. Se invece ti sei registrato da solo, riceverai un'email di verifica con un link di conferma.", ar:"يتم الدخول بالبريد الإلكتروني وكلمة المرور. إذا أنشأ أحد المديرين حسابك يدويًا، ستصلك رسالة لتعيين كلمة المرور مباشرة، ولا حاجة عندها لتأكيد البريد الإلكتروني. أما إذا سجّلت بنفسك، فستصلك رسالة تحقق تحتوي على رابط تأكيد." },
+        { t:"chips", items:[
+          { it:"Ho verificato, continua", ar:"لقد تحقق، متابعة", kind:"primary" },
+          { it:"reinvia l'email di verifica", ar:"إعادة إرسال بريد التحقق", kind:"outline" }
+        ]},
+        { t:"p", it:"Al primo accesso ti verrà chiesto di completare il profilo: tipo di utente (Studente o Insegnante), data di nascita (obbligatoria, l'età viene calcolata automaticamente) e, se sei Studente, anche l'anno scolastico (con il pulsante \"Genera anno scolastico\") e i dati dell'Aula Studio (tipo di scuola, classe, numero di registro) nella stessa schermata.", ar:"عند الدخول لأول مرة سيُطلب منك إكمال ملفك الشخصي: نوع المستخدم (طالب أو معلم)، تاريخ الميلاد (إلزامي، ويُحسب العمر تلقائيًا)، وإذا كنت طالبًا: السنة الدراسية (بزر \"إنشاء السنة الدراسية\") وبيانات قاعة الدراسة (نوع المدرسة، الفصل، رقم السجل) في نفس الشاشة." },
+        { t:"callout", kind:"tip", it:"Se eri già uno studente registrato prima che venissero introdotti questi campi, al primo accesso ti verrà chiesta solo la \"Registrazione Aula Studio\" ridotta: tipo di scuola, classe e numero di registro.", ar:"إذا كنت طالبًا مسجّلاً بالفعل قبل إضافة هذه الحقول، سيُطلب منك عند الدخول التالي فقط \"تسجيل قاعة الدراسة\" المختصر: نوع المدرسة، الفصل، ورقم السجل." },
+        { t:"p", it:"La lingua si cambia dal pulsante Italiano/العربية presente nelle schermate di accesso, verifica e completamento profilo, oppure in Impostazioni → Preferenze in qualsiasi momento. Passando all'arabo l'intera interfaccia si adatta automaticamente da destra a sinistra.", ar:"تُغيَّر اللغة من زر Italiano/العربية الموجود في شاشات الدخول والتحقق وإكمال الملف الشخصي، أو من الإعدادات ← التفضيلات في أي وقت. عند التبديل إلى العربية تتكيف الواجهة بالكامل تلقائيًا من اليمين إلى اليسار." },
+        { t:"callout", kind:"warn", it:"Se un gestore blocca il tuo account, al tentativo di accesso vedrai un messaggio che te lo spiega; per lo sblocco devi contattare un gestore.", ar:"إذا قام أحد المديرين بحظر حسابك، ستظهر لك عند محاولة الدخول رسالة توضح ذلك؛ لإلغاء الحظر يجب التواصل مع أحد المديرين." }
+      ]
+    },
+    {
+      id: "navigazione", group: "all",
+      title: { it: "2. Navigazione generale", ar: "٢. التنقل العام" },
+      roles: ["tutti"],
+      blocks: [
+        { t:"p", it:"La barra di navigazione (in alto sul computer, in basso su Android) contiene: Home, Calendario (oppure \"Gestione Prenotazioni\" al posto di Calendario se puoi approvare le richieste), Manutenzione e Impostazioni.", ar:"يحتوي شريط التنقل (أعلى الشاشة على الحاسوب، أسفلها على أندرويد) على: الرئيسية، التقويم (أو \"إدارة الحجوزات\" بدلاً من التقويم إذا كان بإمكانك الموافقة على الطلبات)، الصيانة، والإعدادات." },
+        { t:"p", it:"La pagina Home mostra una scheda per ciascuna sezione della scuola (per esempio Educazione di base, Scuola Media, Istituto Professionale, aree comuni): toccandola si accede alle sue aule. Nella stessa pagina trovi anche una scheda dedicata \"Aula Studio\".", ar:"تعرض الصفحة الرئيسية بطاقة لكل قسم من أقسام المدرسة (مثلاً: التعليم الأساسي، المدرسة الإعدادية، المعهد الصناعي، المناطق المشتركة): بلمسها تصل إلى قاعاتها. وفي نفس الصفحة توجد أيضًا بطاقة مخصصة \"قاعة الدراسة\"." },
+        { t:"p", it:"In alto trovi il tuo nome (si apre \"Il mio profilo\" toccandolo), il tuo ruolo, la campana 🔔 delle notifiche con il contatore dei non letti, e \"Esci\".", ar:"في الأعلى تجد اسمك (يفتح \"ملفي الشخصي\" عند لمسه)، دورك، جرس 🔔 الإشعارات مع عداد غير المقروءة، و\"خروج\"." }
+      ]
+    },
+    {
+      id: "prenotare", group: "all",
+      title: { it: "3. Prenotare un'aula", ar: "٣. حجز قاعة" },
+      roles: ["tutti"],
+      blocks: [
+        { t:"p", it:"Chiunque abbia un ruolo nell'app può prenotare un'aula (non solo lo staff). Dalla scheda della sezione, apri l'aula e il modulo di prenotazione.", ar:"يمكن لأي مستخدم لديه دور في التطبيق حجز قاعة (وليس فقط الطاقم الإداري). من بطاقة القسم، افتح القاعة ونموذج الحجز." },
+        { t:"ol", items:[
+          { it:"Scegli la Data: puoi prenotare fino a 2 mesi in avanti.", ar:"اختر التاريخ: يمكن الحجز حتى شهرين مقدمًا." },
+          { it:"Facoltativo: spunta \"Ripeti ogni settimana\" e imposta \"Fino al:\" (fino a 12 mesi). Oltre i limiti normali, la richiesta viene segnalata come ★ Speciale e richiede un'autorizzazione ulteriore.", ar:"اختياري: فعّل \"كرر كل أسبوع\" وحدد \"حتى:\" (حتى 12 شهرًا). عند تجاوز الحدود المعتادة، يُعلَّم الطلب بـ ★ خاصة ويحتاج إلى تصريح إضافي." },
+          { it:"Scegli una o più fasce orarie tra le 14 disponibili (08:00–22:00, un'ora ciascuna).", ar:"اختر فترة زمنية واحدة أو أكثر من بين ١٤ فترة متاحة (٠٨:٠٠–٢٢:٠٠، ساعة واحدة لكل فترة)." },
+          { it:"Scrivi il \"Motivo dell'uso:\" (obbligatorio).", ar:"اكتب \"سبب الاستخدام:\" (إلزامي)." },
+          { it:"Facoltativo: \"Insegnante di riferimento (facoltativo):\".", ar:"اختياري: \"المعلم المرجعي (اختياري):\"." },
+          { it:"Se l'aula appartiene alla Scuola Professionale (IPI): rispondi a \"Sei uno studente IPI?\" e, se sì, indica il \"Nome della classe:\".", ar:"إذا كانت القاعة تابعة للمعهد الصناعي (IPI): أجب عن \"هل أنت طالب في IPI؟\"، وإذا كانت الإجابة نعم، أدخل \"اسم الفصل:\"." },
+          { it:"Aggiungi eventuali \"Nomi dei partecipanti:\".", ar:"أضف \"أسماء المشاركين:\" إن وُجدت." },
+          { it:"Tocca \"Conferma prenotazione\".", ar:"اضغط \"تأكيد الحجز\"." }
+        ]},
+        { t:"h3", it:"Fasce orarie", ar:"الفترات الزمنية" },
+        { t:"fasce" },
+        { t:"p", it:"Nel Calendario, le tue prenotazioni mostrano \"TUA (stato)\" con una ✕ per annullarle; quelle degli altri utenti mostrano \"OCCUPATA\". Nel \"Calendario Pubblico\" una legenda a pallini indica i giorni liberi e occupati.", ar:"في التقويم، تظهر حجوزاتك بعلامة \"حجزك (الحالة)\" مع ✕ لإلغائها؛ أما حجوزات الآخرين فتظهر بعلامة \"محجوزة\". وفي \"التقويم العام\" يوضح مفتاح بنقاط ملونة الأيام المتاحة والمحجوزة." },
+        { t:"legend" }
+      ]
+    },
+    {
+      id: "guasto", group: "all",
+      title: { it: "4. Segnalare un guasto", ar: "٤. الإبلاغ عن عطل" },
+      roles: ["tutti"],
+      blocks: [
+        { t:"ol", items:[
+          { it:"Vai su Manutenzione e tocca \"+ Nuova Segnalazione\".", ar:"اذهب إلى الصيانة واضغط \"+ بلاغ جديد\"." },
+          { it:"Scegli l'aula interessata.", ar:"اختر القاعة المعنية." },
+          { it:"Scegli il tipo di guasto: Elettrico, Informatico, Strutturale o Altro.", ar:"اختر نوع العطل: كهربائي، معلوماتي، إنشائي، أو آخر." },
+          { it:"Scrivi una descrizione (obbligatoria).", ar:"اكتب وصفًا (إلزامي)." },
+          { it:"Tocca \"Invia Segnalazione\".", ar:"اضغط \"إرسال البلاغ\"." }
+        ]},
+        { t:"p", it:"Puoi filtrare le tue segnalazioni per stato:", ar:"يمكنك تصفية بلاغاتك حسب الحالة:" },
+        { t:"badges", items:[
+          { it:"Da risolvere", ar:"قيد الحل", kind:"warn" },
+          { it:"Presa in carico", ar:"قيد المعالجة", kind:"neutral" },
+          { it:"Risolto", ar:"تم الحل", kind:"good" },
+          { it:"Tutte", ar:"الكل", kind:"neutral" }
+        ]},
+        { t:"p", it:"Aprendo il dettaglio di una segnalazione trovi lo \"Storico tempistiche\" con i passaggi di stato registrati.", ar:"عند فتح تفاصيل البلاغ تجد \"السجل الزمني\" الذي يوضح تغيّرات الحالة المسجَّلة." },
+        { t:"callout", kind:"tip", it:"Riceverai una notifica quando la segnalazione viene presa in carico e quando viene risolta. Le segnalazioni risolte vengono archiviate automaticamente a fine mese.", ar:"ستصلك إشعار عند استلام البلاغ للمعالجة وعند حله. تُؤرشف البلاغات المحلولة تلقائيًا في نهاية كل شهر." }
+      ]
+    },
+    {
+      id: "notifiche", group: "all",
+      title: { it: "5. Notifiche", ar: "٥. الإشعارات" },
+      roles: ["tutti"],
+      blocks: [
+        { t:"p", it:"Tocca la campana 🔔 in alto per aprire il centro notifiche. In Impostazioni → Notifiche puoi scegliere quali categorie ricevere, raggruppate in Prenotazione, Manutenzione e Aula Studio; le categorie visibili dipendono dal tuo ruolo.", ar:"اضغط على جرس 🔔 في الأعلى لفتح مركز الإشعارات. من الإعدادات ← الإشعارات يمكنك اختيار الفئات التي تريد استلامها، مقسّمة إلى الحجز، الصيانة، وقاعة الدراسة؛ وتعتمد الفئات الظاهرة على دورك." },
+        { t:"h3", it:"Prenotazione", ar:"الحجز" },
+        { t:"ul", items:[
+          { it:"Nuova richiesta prenotazione", ar:"طلب حجز جديد" },
+          { it:"Esito prenotazione (approvata/rifiutata)", ar:"نتيجة الحجز (موافقة/رفض)" }
+        ]},
+        { t:"h3", it:"Manutenzione", ar:"الصيانة" },
+        { t:"ul", items:[
+          { it:"Nuova segnalazione guasto", ar:"بلاغ عطل جديد" },
+          { it:"Inizio lavoro (presa in carico)", ar:"بدء العمل (استلام البلاغ)" },
+          { it:"Fine lavoro (segnalazione risolta)", ar:"انتهاء العمل (تم حل البلاغ)" }
+        ]},
+        { t:"h3", it:"Aula Studio", ar:"قاعة الدراسة" },
+        { t:"ul", items:[
+          { it:"Nuova richiesta di turno Aula Studio", ar:"طلب مناوبة جديد في قاعة الدراسة" },
+          { it:"Esito richiesta di turno Aula Studio", ar:"نتيجة طلب المناوبة في قاعة الدراسة" }
+        ]}
+      ]
+    },
+    {
+      id: "aula-studente", group: "aula",
+      title: { it: "6. Aula Studio — lato Studente", ar: "٦. قاعة الدراسة — جهة الطالب" },
+      roles: ["studente"],
+      blocks: [
+        { t:"p", it:"Dalla Home tocca la scheda \"Aula Studio\". Trovi due schede: \"Prenota\" e \"Le mie prenotazioni\".", ar:"من الصفحة الرئيسية اضغط على بطاقة \"قاعة الدراسة\". ستجد تبويبين: \"حجز\" و\"حجوزاتي\"." },
+        { t:"h3", it:"Prenotare un posto", ar:"حجز مقعد" },
+        { t:"ol", items:[
+          { it:"Scegli l'aula: vedi solo quelle del tuo tipo di scuola (Medie o IPI).", ar:"اختر القاعة: تظهر لك فقط قاعات نوع مدرستك (الإعدادية أو IPI)." },
+          { it:"Scegli il giorno: sono selezionabili solo i prossimi giorni lavorativi entro l'anticipo consentito. Venerdì e domenica sono sempre chiusi per l'Aula Studio.", ar:"اختر اليوم: يمكن اختيار أيام العمل القادمة فقط ضمن مدة الحجز المسموحة. الجمعة والأحد مغلقان دائمًا في قاعة الدراسة." },
+          { it:"Scegli una fascia oraria: vedrai i posti liberi rimasti oppure, se la fascia è piena, la tua posizione in lista d'attesa.", ar:"اختر فترة زمنية: سترى عدد المقاعد المتبقية، أو إن كانت الفترة ممتلئة، ترتيبك في قائمة الانتظار." },
+          { it:"Tocca \"Prenota\".", ar:"اضغط \"احجز\"." }
+        ]},
+        { t:"p", it:"Il risultato può essere una prenotazione confermata oppure l'inserimento in lista d'attesa, con promozione automatica e notifica se in seguito si libera un posto. Non puoi prenotare due aule diverse nella stessa fascia oraria.", ar:"قد تكون النتيجة حجزًا مؤكدًا أو إدراجًا في قائمة الانتظار، مع ترقية تلقائية وإشعار إذا تحرر مقعد لاحقًا. لا يمكن حجز قاعتين مختلفتين في نفس الفترة الزمنية." },
+        { t:"h3", it:"Le mie prenotazioni", ar:"حجوزاتي" },
+        { t:"badges", items:[
+          { it:"Confermata", ar:"مؤكدة", kind:"good" },
+          { it:"In lista d'attesa", ar:"في قائمة الانتظار", kind:"warn" }
+        ]},
+        { t:"p", it:"Il pulsante \"Annulla\" è disponibile finché la fascia oraria non è iniziata.", ar:"يظل زر \"إلغاء\" متاحًا طالما لم تبدأ الفترة الزمنية." },
+        { t:"h3", it:"Pallini rossi", ar:"النقاط الحمراء" },
+        { t:"p", it:"Il responsabile può assegnarti un pallino per un motivo dichiarato. I pallini si colorano secondo il conteggio nel semestre: 1° bianco, 2° giallo, 3° e successivi rossi. Si azzerano a ogni nuovo semestre.", ar:"يمكن للمسؤول إسناد نقطة لك مع ذكر السبب. تتلون النقاط حسب عددها في الفصل الدراسي: الأولى بيضاء، الثانية صفراء، الثالثة وما بعدها حمراء. تُصفَّر النقاط تلقائيًا مع كل فصل دراسي جديد." },
+        { t:"p", it:"Al terzo pallino nel semestre, il responsabile può scegliere tra tre azioni: bloccarti per un numero di giorni lavorativi configurabile, rifiutare la tua prenotazione corrente, oppure darti un'altra possibilità senza conseguenze.", ar:"عند النقطة الثالثة في الفصل الدراسي، يمكن للمسؤول الاختيار بين ثلاثة إجراءات: حظرك لعدد من أيام العمل القابل للتحديد، رفض حجزك الحالي، أو منحك فرصة أخرى دون عواقب." },
+        { t:"callout", kind:"warn", it:"Se il tuo accesso all'Aula Studio è bloccato, o non hai ancora completato il profilo Aula Studio, vedrai un messaggio esplicativo al posto del modulo di prenotazione.", ar:"إذا كان وصولك إلى قاعة الدراسة محظورًا، أو لم تُكمل بعد ملف قاعة الدراسة، ستظهر لك رسالة توضيحية بدلاً من نموذج الحجز." }
+      ]
+    },
+    {
+      id: "aula-insegnante", group: "aula",
+      title: { it: "7. Aula Studio — lato Insegnante", ar: "٧. قاعة الدراسة — جهة المعلم" },
+      roles: ["insegnante"],
+      blocks: [
+        { t:"p", it:"Come insegnante puoi proporti come responsabile volontario di un turno in Aula Studio.", ar:"بصفتك معلمًا، يمكنك التطوع لتكون مسؤولًا عن مناوبة في قاعة الدراسة." },
+        { t:"ol", items:[
+          { it:"Nella scheda Aula Studio, sezione \"Richiedi un turno\": scegli aula, giorno e una o più fasce orarie.", ar:"في بطاقة قاعة الدراسة، قسم \"طلب مناوبة جديدة\": اختر القاعة، اليوم، وفترة زمنية واحدة أو أكثر." },
+          { it:"Tocca \"Invia richiesta\".", ar:"اضغط \"إرسال الطلب\"." }
+        ]},
+        { t:"p", it:"La richiesta viene inviata ai gestori dell'Aula Studio competenti per quel tipo di scuola (per esempio Segreteria, Preside o Vice Preside IPI per l'Istituto Professionale) per la conferma.", ar:"يُرسَل الطلب إلى مديري قاعة الدراسة المختصين بنوع تلك المدرسة (مثلاً السكرتارية أو مدير المعهد أو نائب مدير المعهد بالنسبة لـ IPI) للموافقة عليه." },
+        { t:"h3", it:"Le mie richieste", ar:"طلباتي" },
+        { t:"badges", items:[
+          { it:"In attesa", ar:"قيد الانتظار", kind:"neutral" },
+          { it:"Confermata", ar:"مؤكدة", kind:"good" },
+          { it:"Rifiutata", ar:"مرفوضة", kind:"danger" },
+          { it:"Scaduta", ar:"منتهية", kind:"warn" }
+        ]},
+        { t:"p", it:"Le richieste confermate compaiono nel calendario \"I tuoi giorni confermati\". Nel dettaglio del giorno, il link \"Apri Appello ›\" è visibile solo quando la fascia si sblocca, 5 minuti prima del suo inizio: prima di allora la sezione resta in sola lettura.", ar:"تظهر الطلبات المؤكدة في تقويم \"أيامك المؤكدة\". وفي تفاصيل اليوم، يظهر رابط \"فتح الحضور ›\" فقط عندما تُفتح الفترة، أي قبل ٥ دقائق من بدايتها؛ وقبل ذلك يبقى القسم للقراءة فقط." }
+      ]
+    }
+  ];
+
+  var app = document.getElementById("app");
+  var tocEl = document.getElementById("toc");
+  var sectionsEl = document.getElementById("sections");
+  var langBtns = document.querySelectorAll("[data-lang-btn]");
+
+  function esc(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+    });
+  }
+
+  function renderChips(items, lang){
+    return '<div class="chip-row">' + items.map(function(it){
+      return '<span class="ui-chip ' + it.kind + '">' + esc(it[lang]) + '</span>';
+    }).join("") + '</div>';
+  }
+  function renderBadges(items, lang){
+    return '<div class="badge-row">' + items.map(function(it){
+      return '<span class="status-badge ' + it.kind + '">' + esc(it[lang]) + '</span>';
+    }).join("") + '</div>';
+  }
+  function renderCallout(b, lang){
+    var icon = b.kind === "tip" ? "&#9432;" : "&#9888;";
+    return '<div class="callout ' + b.kind + '"><span class="ic">' + icon + '</span><p>' + esc(b[lang]) + '</p></div>';
+  }
+  function renderFasce(lang){
+    var slots = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+    var html = '<div class="fasce-grid">';
+    slots.forEach(function(s, i){
+      var cls = i === 3 ? 'locked' : (i === 0 ? 'past' : '');
+      html += '<div class="fslot ' + cls + '">' + s + '</div>';
+    });
+    html += '</div>';
+    var legendGood = lang === 'ar' ? '&#128340; الوقت قد مضى' : '&#128340; Orario già passato';
+    var legendBad = lang === 'ar' ? '&#128274; محجوزة من مستخدم آخر' : '&#128274; Occupata da un altro utente';
+    html += '<div class="legend-row"><span class="legend-item">' + legendBad + '</span><span class="legend-item">' + legendGood + '</span></div>';
+    return html;
+  }
+  function renderLegend(lang){
+    var libero = lang === 'ar' ? 'متاح' : 'Libero';
+    var occupato = lang === 'ar' ? 'محجوز' : 'Occupato';
+    return '<div class="legend-row">' +
+      '<span class="legend-item"><span class="legend-dot good"></span>' + esc(libero) + '</span>' +
+      '<span class="legend-item"><span class="legend-dot danger"></span>' + esc(occupato) + '</span>' +
+      '</div>';
+  }
+
+  function renderBlock(b, lang){
+    switch(b.t){
+      case "p": return '<p class="body-p">' + esc(b[lang]) + '</p>';
+      case "h3": return '<h3 class="sub">' + esc(b[lang]) + '</h3>';
+      case "ul": return '<ul class="plain">' + b.items.map(function(i){ return '<li>' + esc(i[lang]) + '</li>'; }).join("") + '</ul>';
+      case "ol": return '<ol class="steps">' + b.items.map(function(i){ return '<li><span>' + esc(i[lang]) + '</span></li>'; }).join("") + '</ol>';
+      case "chips": return renderChips(b.items, lang);
+      case "badges": return renderBadges(b.items, lang);
+      case "callout": return renderCallout(b, lang);
+      case "fasce": return renderFasce(lang);
+      case "legend": return renderLegend(lang);
+      default: return "";
+    }
+  }
+
+  var roleLabelKey = { tutti:"roleTutti", studente:"roleStudente", insegnante:"roleInsegnante" };
+
+  function render(lang){
+    app.dir = lang === "ar" ? "rtl" : "ltr";
+    app.lang = lang;
+    var t = UI[lang];
+
+    app.querySelectorAll("[data-t]").forEach(function(el){
+      el.textContent = t[el.getAttribute("data-t")];
+    });
+    langBtns.forEach(function(btn){
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-lang-btn") === lang ? "true" : "false");
+    });
+
+    // TOC
+    var groupAll = SECTIONS.filter(function(s){ return s.group === "all"; });
+    var groupAula = SECTIONS.filter(function(s){ return s.group === "aula"; });
+    function tocLinks(list){
+      return list.map(function(s){
+        return '<a href="#' + s.id + '" data-toc="' + s.id + '">' + esc(s.title[lang]) + '</a>';
+      }).join("");
+    }
+    tocEl.innerHTML =
+      '<div class="toc-group"><div class="toc-label">' + esc(t.tocAll) + '</div>' + tocLinks(groupAll) + '</div>' +
+      '<div class="toc-group"><div class="toc-label">' + esc(t.tocStudenti) + '</div>' + tocLinks(groupAula) + '</div>';
+
+    // Sections
+    sectionsEl.innerHTML = SECTIONS.map(function(s){
+      var roleTags = s.roles.map(function(r){
+        return '<span class="role-tag ' + r + '">' + esc(t[roleLabelKey[r]]) + '</span>';
+      }).join("");
+      var body = s.blocks.map(function(b){ return renderBlock(b, lang); }).join("");
+      return '<section class="doc-section" id="' + s.id + '">' +
+        '<div class="sec-head"><h2>' + esc(s.title[lang]) + '</h2><div class="role-tags">' + roleTags + '</div></div>' +
+        body +
+        '</section>';
+    }).join("");
+
+    try { localStorage.setItem("gaGuidaLang", lang); } catch(e){}
+    setupScrollSpy();
+  }
+
+  langBtns.forEach(function(btn){
+    btn.addEventListener("click", function(){
+      render(btn.getAttribute("data-lang-btn"));
+    });
+  });
+
+  var scrollSpyIO = null;
+  function setupScrollSpy(){
+    if (scrollSpyIO) scrollSpyIO.disconnect();
+    var links = tocEl.querySelectorAll("a[data-toc]");
+    var map = {};
+    links.forEach(function(a){ map[a.getAttribute("data-toc")] = a; });
+    scrollSpyIO = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        var link = map[entry.target.id];
+        if (!link) return;
+        if (entry.isIntersecting){
+          links.forEach(function(a){ a.classList.remove("active"); });
+          link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-20% 0px -70% 0px" });
+    document.querySelectorAll("section.doc-section").forEach(function(sec){ scrollSpyIO.observe(sec); });
+  }
+
+  var initialLang = "it";
+  try {
+    var saved = localStorage.getItem("gaGuidaLang");
+    if (saved === "it" || saved === "ar") initialLang = saved;
+  } catch(e){}
+  render(initialLang);
+})();
+</script>
+
+</body>
+</html>
