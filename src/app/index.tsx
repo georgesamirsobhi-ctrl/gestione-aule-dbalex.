@@ -50,7 +50,7 @@ import AulaStudioResponsabileView from '@/components/aula-studio/aula-studio-res
 import AulaStudioStudentView from '@/components/aula-studio/aula-studio-student-view';
 import AulaStudioTurniView from '@/components/aula-studio/aula-studio-turni-view';
 import { puoGestireAulaStudio } from '@/components/aula-studio/aula-studio-constants';
-import { salvaProfiloAulaStudio } from '@/components/aula-studio/aula-studio-data';
+import { salvaProfiloAulaStudio, useAulaStudioPrenotazioniAttive, salvaAulaStudioPrenotazioniAttive } from '@/components/aula-studio/aula-studio-data';
 import ConfigWizard from '@/components/config-wizard/config-wizard';
 import { fasceOrarieAuleComeStringhe, useFasceOrarieAule } from '@/components/config-wizard/config-wizard-fasce-aule-data';
 import { useRegolePrenotazioneAule } from '@/components/config-wizard/config-wizard-regole-prenotazione-data';
@@ -548,6 +548,10 @@ const t = (key, lang, ...args) => {
       richiesteRipetuteInviate: (n) => `${n} richieste inviate!`,
       alcuneDateSaltate: (n) => ` (${n} date saltate perché l'aula era già occupata da un altro utente)`,
       bloccaAula: 'Blocca',
+      sospendiPrenotazioni: 'Sospendi',
+      riattivaPrenotazioni: 'Riattiva',
+      sospesaBadge: '⏸ Sospesa',
+      prenotazioniSospeseMessaggio: 'Le prenotazioni sono sospese: al momento non si può prenotare.',
       bloccaAulaTitolo: (nome) => `Blocca ${nome}`,
       bloccaAulaSpiegazione: "Rende l'aula non prenotabile in tutte le fasce orarie per l'intero periodo scelto (es. per lavori, uso riservato, chiusura stagionale). Non è limitato ai mesi previsti per le prenotazioni normali.",
       dataInizioBlocco: 'Data inizio blocco:',
@@ -1083,6 +1087,10 @@ const t = (key, lang, ...args) => {
       richiesteRipetuteInviate: (n) => `تم إرسال ${n} طلبات!`,
       alcuneDateSaltate: (n) => ` (تم تخطي ${n} تواريخ لأن القاعة كانت محجوزة من مستخدم آخر)`,
       bloccaAula: 'حظر',
+      sospendiPrenotazioni: 'تعليق',
+      riattivaPrenotazioni: 'إعادة التفعيل',
+      sospesaBadge: '⏸ معلّقة',
+      prenotazioniSospeseMessaggio: 'الحجوزات معلّقة: لا يمكن الحجز في الوقت الحالي.',
       bloccaAulaTitolo: (nome) => `حظر ${nome}`,
       bloccaAulaSpiegazione: 'يجعل القاعة غير قابلة للحجز في جميع الفترات الزمنية طوال المدة المحددة (مثلاً بسبب أعمال صيانة أو استخدام محجوز). غير مقيد بالأشهر المسموح بها للحجوزات العادية.',
       dataInizioBlocco: 'تاريخ بدء الحظر:',
@@ -1704,6 +1712,8 @@ export default function App() {
   const [classiLista, setClassiLista] = useState<any[]>([]);
   const [utentiLista, setUtentiLista] = useState<any[]>([]);
   const [sezioniLista, setSezioniLista] = useState<any[]>([]);
+  // Aula Studio: stato attivo/sospeso delle prenotazioni (Medie e IPI), lo stesso interruttore di Impostazioni → Aula Studio.
+  const { prenotazioniAttive: aulaStudioPrenotazioniAttive } = useAulaStudioPrenotazioniAttive(db);
 
   // ---- SEZIONI FISSE E CLASSI-COME-AULE ----
   // La sezione scelta è la Scuola Professionale? (si riconosce dalla chiave interna, non dal nome:
@@ -1728,12 +1738,18 @@ export default function App() {
         sezione: c.tipo === 'ipi' ? nomeProf : nomeBase,
         ordine: c.ordine ?? 0,
         daClasse: true,
+        sospesa: c.sospesa === true,
         anno: c.tipo === 'ipi' ? annoClasse(c) : null,
         // Nome arabo: solo per le classi di Scuola Base (es. "1 Elem. A" → "١ ابتدائى أ"); le IPI restano in italiano.
         nomeAr: c.tipo === 'medie' ? traduciNomeClasseAr(c.nome) : '',
       }));
   }, [classiLista, sezioniLista]);
   const auleTutte = useMemo(() => [...aule, ...auleClassi], [aule, auleClassi]);
+  // ---- SOSPENSIONE DELLE PRENOTAZIONI ----
+  // Ogni sezione, aula e classe ha un interruttore "Sospendi" in Impostazioni. Una sezione sospesa sospende
+  // tutte le sue aule e classi. Il campo `sospesa` è salvato nel documento (sezioni / aule / classi).
+  const sezioneSospesa = (nomeSezione?: string) => sezioniLista.some((x) => x.nome === nomeSezione && x.sospesa === true);
+  const isAulaSospesa = (a: any) => !!a && (a.sospesa === true || sezioneSospesa(a.sezione));
   // Dentro Scuola Base / Scuola Professionale: la voce "Classi" è una scheda che apre la pagina con tutte le classi.
   const [classiAperte, setClassiAperte] = useState(false);
   useEffect(() => { setClassiAperte(false); }, [sezioneSelezionata, vistaAttiva]);
@@ -2871,6 +2887,10 @@ export default function App() {
   // mostraConfirmRichiestaSpecialeAnticipo sopra — salta il blocco per anticipo insufficiente e
   // marca la prenotazione come richiesta speciale invece di procedere come prenotazione normale.
   const eseguiInvioPrenotazione = async (forzaRichiestaSpeciale) => {
+    if (isAulaSospesa(aulaInPrenotazione)) {
+      mostraAlert(t('attenzione', lang), t('prenotazioniSospeseMessaggio', lang));
+      return;
+    }
     if (!motivo.trim() || fasceSelezionate.length === 0) {
       mostraAlert(t('attenzione', lang), t('compilaMotivoFascia', lang));
       return;
@@ -3125,6 +3145,29 @@ export default function App() {
       caricaDatiGenerali();
     } catch (e) {
       console.error('Errore:', e);
+    }
+  };
+
+  const impostaSospensione = async (collezione: 'sezioni' | 'aule' | 'classi', id: string, nome: string, sospendi: boolean) => {
+    try {
+      await updateDoc(doc(db, collezione, id), { sospesa: sospendi });
+      await registraAttivita(
+        TIPI_REGISTRO.MODIFICA_AULA,
+        `Prenotazioni ${sospendi ? 'sospese' : 'riattivate'}: ${nome}`
+      );
+      caricaDatiGenerali();
+    } catch (e) {
+      console.error('Errore sospensione prenotazioni:', e);
+    }
+  };
+
+  const impostaSospensioneAulaStudio = async (sospendi: boolean) => {
+    try {
+      await salvaAulaStudioPrenotazioniAttive(db, 'medie', !sospendi);
+      await salvaAulaStudioPrenotazioniAttive(db, 'ipi', !sospendi);
+      await registraAttivita(TIPI_REGISTRO.MODIFICA_AULA, `Prenotazioni Aula Studio ${sospendi ? 'sospese' : 'riattivate'}`);
+    } catch (e) {
+      console.error('Errore sospensione Aula Studio:', e);
     }
   };
 
@@ -4921,6 +4964,9 @@ export default function App() {
                       }}
                     >
                       <Text style={styles.cleanCardText}>{risolviNomeSezione(sez.nome, lang)}</Text>
+                      {(isAulaStudio ? (!aulaStudioPrenotazioniAttive.medie && !aulaStudioPrenotazioniAttive.ipi) : sez.sospesa === true) && (
+                        <Text style={[styles.aulaDesc, { textAlign: 'center', marginTop: 4 }]}>{t('sospesaBadge', lang)}</Text>
+                      )}
                     </TouchableOpacity>
                   </View>
                 );
@@ -4937,6 +4983,9 @@ export default function App() {
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionHeaderTitle}>{risolviNomeSezione(sezioneSelezionata, lang)}</Text>
             </View>
+            {sezioneSospesa(sezioneSelezionata) && (
+              <Text style={[styles.infoTextSmall, { marginBottom: 10 }]}>⏸ {t('prenotazioniSospeseMessaggio', lang)}</Text>
+            )}
             {(() => {
               const auleSezione = auleTutte.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0));
               const classiSezione = auleSezione.filter((a) => a.daClasse);
@@ -4950,9 +4999,15 @@ export default function App() {
                     ) : null}
                   </View>
                   <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <TouchableOpacity style={styles.primaryButtonSmall} onPress={() => setAulaInPrenotazione(aula)}>
-                      <Text style={styles.buttonTextSmall}>{t('prenota', lang)}</Text>
-                    </TouchableOpacity>
+                    {isAulaSospesa(aula) ? (
+                      <View style={[styles.primaryButtonSmall, { backgroundColor: colors.moveBtn }]}>
+                        <Text style={[styles.buttonTextSmall, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('sospesaBadge', lang)}</Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity style={styles.primaryButtonSmall} onPress={() => setAulaInPrenotazione(aula)}>
+                        <Text style={styles.buttonTextSmall}>{t('prenota', lang)}</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               );
@@ -6028,7 +6083,7 @@ export default function App() {
                           >
                             <View style={styles.settingsMenuItemLeft}>
                               <Text style={styles.settingsMenuItemIcon}>{isAulaStudio ? '📖' : '🏫'}</Text>
-                              <Text style={styles.settingsMenuItemLabel}>{risolviNomeSezione(sez.nome, lang)}{sez.chiave ? ' 🔒' : ''}</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{risolviNomeSezione(sez.nome, lang)}{(sez.chiave || isAulaStudio) ? ' 🔒' : ''}</Text>
                             </View>
                             <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
                           </TouchableOpacity>
@@ -6042,6 +6097,19 @@ export default function App() {
                             <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaSezione(sez)}>
                               <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
                             </TouchableOpacity>
+                            {(() => {
+                              const sospesa = isAulaStudio ? (!aulaStudioPrenotazioniAttive.medie && !aulaStudioPrenotazioniAttive.ipi) : sez.sospesa === true;
+                              return (
+                                <TouchableOpacity
+                                  style={[styles.smallMoveBtn, sospesa && { backgroundColor: colors.danger }]}
+                                  onPress={() => (isAulaStudio ? impostaSospensioneAulaStudio(!sospesa) : impostaSospensione('sezioni', sez.id, sez.nome, !sospesa))}
+                                >
+                                  <Text style={[styles.btnText, { color: sospesa ? '#FFFFFF' : (isDarkMode ? '#F8FAFC' : '#0F172A') }]}>
+                                    {sospesa ? `⏸ ${t('riattivaPrenotazioni', lang)}` : t('sospendiPrenotazioni', lang)}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })()}
                             {!isAulaStudio && !sez.chiave && (
                               <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaSezione(sez.id)}>
                                 <Text style={styles.btnText}>{t('elimina', lang)}</Text>
@@ -6086,6 +6154,14 @@ export default function App() {
                         <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
                           <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
                         </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.smallMoveBtn, aula.sospesa === true && { backgroundColor: colors.danger }]}
+                          onPress={() => impostaSospensione('aule', aula.id, aula.nome, aula.sospesa !== true)}
+                        >
+                          <Text style={[styles.btnText, { color: aula.sospesa === true ? '#FFFFFF' : (isDarkMode ? '#F8FAFC' : '#0F172A') }]}>
+                            {aula.sospesa === true ? `⏸ ${t('riattivaPrenotazioni', lang)}` : t('sospendiPrenotazioni', lang)}
+                          </Text>
+                        </TouchableOpacity>
                         <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaAula(aula.id)}>
                           <Text style={styles.btnText}>{t('elimina', lang)}</Text>
                         </TouchableOpacity>
@@ -6098,9 +6174,19 @@ export default function App() {
                         <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
                         <Text style={styles.aulaDesc}>{t('classiVoce', lang)}</Text>
                       </View>
-                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
-                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
+                          <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.smallMoveBtn, aula.sospesa === true && { backgroundColor: colors.danger }]}
+                          onPress={() => impostaSospensione('classi', aula.classeId, aula.nome, aula.sospesa !== true)}
+                        >
+                          <Text style={[styles.btnText, { color: aula.sospesa === true ? '#FFFFFF' : (isDarkMode ? '#F8FAFC' : '#0F172A') }]}>
+                            {aula.sospesa === true ? `⏸ ${t('riattivaPrenotazioni', lang)}` : t('sospendiPrenotazioni', lang)}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   ))}
                   <TouchableOpacity style={[styles.addButton, { alignSelf: isRTL ? 'flex-end' : 'flex-start', marginTop: 4 }]} onPress={apriNuovaAula}>
