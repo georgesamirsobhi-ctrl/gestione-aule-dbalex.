@@ -38,6 +38,14 @@ export const AULA_STUDIO_CONFIG_DEFAULT: AulaStudioConfig = {
   semestre2Inizio: '02-01',
 };
 
+/** Stato attivo/sospeso delle prenotazioni Aula Studio, separato per tipo scuola (documento "generale" in aulaStudioConfig). */
+export interface AulaStudioPrenotazioniAttive {
+  medie: boolean;
+  ipi: boolean;
+}
+
+export const AULA_STUDIO_PRENOTAZIONI_ATTIVE_DEFAULT: AulaStudioPrenotazioniAttive = { medie: true, ipi: true };
+
 export type StatoPrenotazioneAulaStudio = 'Confermata' | 'In attesa';
 
 export type StatoPresenzaAulaStudio =

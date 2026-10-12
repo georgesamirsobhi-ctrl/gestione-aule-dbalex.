@@ -56,3 +56,4 @@ web-build/
 node_modules/
 
 gestione-aule-f9286-firebase-adminsdk-fbsvc-76600354d0.json
+.env*

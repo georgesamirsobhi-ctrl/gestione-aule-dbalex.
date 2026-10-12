@@ -19,6 +19,7 @@ import {
   useAulaStudioAule,
   useAulaStudioConfig,
   useAulaStudioMiePrenotazioni,
+  useAulaStudioPrenotazioniAttive,
   useAulaStudioPrenotazioniGiorno,
 } from './aula-studio-data';
 import {
@@ -50,17 +51,23 @@ function generaGiorniPrenotabili(anticipoGiorni: number, ferieExtra: any[]): str
 }
 
 export default function AulaStudioStudentView(props: AulaStudioSharedProps) {
-  const { db, user, lang, colors, t, mostraAlert, registraAttivita, inviaNotificaConPreferenza, profiloAulaStudio } = props;
-  const styles = useMemo(() => getStyles(colors), [colors]);
+  const { db, user, lang, isRTL, colors, t, mostraAlert, registraAttivita, inviaNotificaConPreferenza, profiloAulaStudio } = props;
+  const styles = useMemo(() => getStyles(colors, isRTL), [colors, isRTL]);
 
   const { configPerAula } = useAulaStudioConfig(db);
   const { aule } = useAulaStudioAule(db);
+  const { prenotazioniAttive } = useAulaStudioPrenotazioniAttive(db);
 
   // Lo studente può prenotare solo nelle aule del proprio tipo scuola (Medie/IPI), secondo il profilo.
   const auleConsentite = useMemo(
     () => (profiloAulaStudio ? aule.filter((a) => a.tipoScuola === profiloAulaStudio.tipoScuola) : []),
     [aule, profiloAulaStudio]
   );
+
+  // Il responsabile può sospendere le nuove prenotazioni separatamente per Medie e per IPI (Impostazioni Aula Studio):
+  // in tal caso il modulo di prenotazione è sostituito da un messaggio, ma "Le mie prenotazioni" resta sempre disponibile.
+  const prenotazioniSospese =
+    !!profiloAulaStudio && !(profiloAulaStudio.tipoScuola === 'medie' ? prenotazioniAttive.medie : prenotazioniAttive.ipi);
 
   const [scheda, setScheda] = useState<'prenota' | 'mie'>('prenota');
   const [aulaId, setAulaId] = useState<string>('');
@@ -261,6 +268,13 @@ export default function AulaStudioStudentView(props: AulaStudioSharedProps) {
 
         {scheda === 'prenota' ? (
           <View>
+            {prenotazioniSospese ? (
+              <View style={styles.bannerSospeso}>
+                <Text style={styles.bannerSospesoTitolo}>{t('aulaStudioPrenotazioniSospeseTitolo', lang)}</Text>
+                <Text style={styles.bannerSospesoTesto}>{t('aulaStudioPrenotazioniSospeseTesto', lang)}</Text>
+              </View>
+            ) : (
+              <>
             <Text style={styles.etichetta}>{t('aulaStudioScegliAula', lang)}</Text>
             {auleConsentite.length === 0 ? (
               <Text style={styles.testoInfo}>
@@ -379,6 +393,8 @@ export default function AulaStudioStudentView(props: AulaStudioSharedProps) {
                 </Modal>
               </>
             )}
+              </>
+            )}
           </View>
         ) : (
           <View>
@@ -420,7 +436,7 @@ export default function AulaStudioStudentView(props: AulaStudioSharedProps) {
   );
 }
 
-const getStyles = (colors: Record<string, string>) =>
+const getStyles = (colors: Record<string, string>, isRTL: boolean) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
     formWrap: { maxWidth: 480, width: '100%', alignSelf: 'center' },
@@ -473,7 +489,9 @@ const getStyles = (colors: Record<string, string>) =>
       alignSelf: 'center',
     },
     modalHeaderFixed: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-    modalTitle: { color: colors.textMain, fontSize: 18, fontWeight: '700', flex: 1, paddingRight: 8 },
+    // Spazio verso il pulsante "✕": in RTL il mirroring nativo lo sposta a sinistra del
+    // titolo, quindi il padding va sul lato opposto rispetto a LTR.
+    modalTitle: { color: colors.textMain, fontSize: 18, fontWeight: '700', flex: 1, paddingRight: isRTL ? 0 : 8, paddingLeft: isRTL ? 8 : 0 },
     closeText: { color: colors.textMain, fontSize: 19 },
     rigaFasce: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
     chipFascia: {
@@ -499,6 +517,9 @@ const getStyles = (colors: Record<string, string>) =>
     bannerBloccatoText: { color: '#fff', fontWeight: '600' },
     bannerAvviso: { backgroundColor: colors.warning, borderRadius: 10, padding: 12, marginTop: 12 },
     bannerAvvisoText: { color: colors.warningText, fontWeight: '600' },
+    bannerSospeso: { backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 16, marginTop: 8 },
+    bannerSospesoTitolo: { color: colors.textMain, fontWeight: '700', fontSize: 16, marginBottom: 6 },
+    bannerSospesoTesto: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
     cardPrenotazione: {
       flexDirection: 'row',
       alignItems: 'center',

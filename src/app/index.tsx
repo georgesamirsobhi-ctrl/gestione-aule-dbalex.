@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as LocalAuthentication from 'expo-local-authentication';
-import * as Notifications from 'expo-notifications';
+import { isRunningInExpoGo } from 'expo';
 import * as Sharing from 'expo-sharing';
 import { deleteApp, initializeApp } from 'firebase/app';
 import {
@@ -29,7 +29,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -39,7 +38,10 @@ import {
   useWindowDimensions,
   View
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// SafeAreaView deprecato in react-native core: usiamo quello di react-native-safe-area-context
+// (già dipendenza del progetto per useSafeAreaInsets) per evitare il warning ed essere pronti
+// alla rimozione futura da react-native.
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as XLSX from 'xlsx';
 import { auth, db, firebaseConfig } from '../config/firebaseConfig';
 import AulaStudioEsportaPanel from '@/components/aula-studio/aula-studio-esporta-panel';
@@ -49,7 +51,20 @@ import AulaStudioStudentView from '@/components/aula-studio/aula-studio-student-
 import AulaStudioTurniView from '@/components/aula-studio/aula-studio-turni-view';
 import { puoGestireAulaStudio } from '@/components/aula-studio/aula-studio-constants';
 import { salvaProfiloAulaStudio } from '@/components/aula-studio/aula-studio-data';
+import ConfigWizard from '@/components/config-wizard/config-wizard';
+import { fasceOrarieAuleComeStringhe, useFasceOrarieAule } from '@/components/config-wizard/config-wizard-fasce-aule-data';
+import { useRegolePrenotazioneAule } from '@/components/config-wizard/config-wizard-regole-prenotazione-data';
 import { numArabo, dataArabo } from '@/utils/numeri-arabo';
+import { traduciNomeClasseAr } from '@/utils/nomi-classi';
+import {
+  annoClasse,
+  approvazioneAutomatica,
+  chiaveDaNomeSezione,
+  chiaveSezione,
+  oraInizioDaFasce,
+  puoApprovareRuolo,
+  RUOLI_CON_AMBITO_APPROVAZIONE,
+} from '@/utils/regole-approvazione';
 
 /** Divide "Nome Cognome" nel modo più ragionevole: ultima parola = cognome, il resto = nome. */
 function separaNomeCognomeAulaStudio(nomeCompleto) {
@@ -94,12 +109,11 @@ const MANUALE_FALLBACK_URL = {
 };
 
 // ---- COSTANTI ESISTENTI ----
-const SEZIONI_INIZIALI = ['Scuola Base', 'Scuola Media', 'Scuola Professionale', 'Comuni'];
-const FASCE_ORARIE = [
-  '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00', '12:00-13:00',
-  '13:00-14:00', '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00', '21:00-22:00'
-];
+// Solo per la prima installazione (database vuoto). Le 4 sezioni fisse si riconoscono dalla chiave interna, non dal nome.
+const SEZIONI_INIZIALI = ['Scuola Base', 'Scuola Professionale', 'TEVT', 'Comuni'];
+// Le fasce orarie delle aule generali (FASCE_ORARIE, ex costante fissa) sono ora una
+// configurazione condivisa modificabile da Impostazioni → Configurazione guidata: vedi
+// l'hook useFasceOrarieAule chiamato dentro App(), che sostituisce questa costante.
 
 const CATEGORIE_NOTIFICHE = {
   NUOVA_PRENOTAZIONE: 'nuova_prenotazione',
@@ -183,17 +197,22 @@ const calcolaEta = (dataNascita) => {
 
 const RUOLI_TIPO_SEGRETERIA = ['segreteria', 'segreteriaSBase', 'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'];
 // 'studente' e 'insegnante' sono ora ruoli veri e propri, selezionabili come tutti gli altri.
-const RUOLI_TUTTI = ['utente', 'TEVT', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore'];
+const RUOLI_TUTTI = ['utente', 'TEVT', 'segreteriaTevt', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore'];
 
 // Funzioni di permesso esistenti
-const puoGestireUtenti = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
-const puoGestireDominiEmail = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
-const puoApprovarePrenotazioni = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+// Direttore (gestore) ed Economo hanno accesso totale. Restano solo del Direttore: reset dati,
+// assegnazione permessi ai ruoli personalizzati e caricamento dei manuali.
+const puoGestireUtenti = (ruolo) => ruolo === 'gestore' || ruolo === 'economo' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+const puoGestireDominiEmail = (ruolo) => ruolo === 'gestore' || ruolo === 'economo' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+// "Ha accesso alla sezione Gestione prenotazioni". CHI può approvare QUALE prenotazione lo decide
+// src/utils/regole-approvazione.ts (reparto, classe, orario). TEVT e Segreteria TEVT approvano solo il loro.
+const puoApprovarePrenotazioni = (ruolo) =>
+  ruolo === 'gestore' || ruolo === 'economo' || ruolo === 'TEVT' || ruolo === 'segreteriaTevt' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 const puoGestireAule = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo) || ruolo === 'economo';
 const puoPrenotareAule = (ruolo) => !!ruolo;
 const puoSegnalareGuasto = (ruolo) => !!ruolo;
 const puoGestireManutenzione = (ruolo) => ruolo === 'gestore' || ruolo === 'economo' || ruolo === 'manutentore';
-const puoEsportareUtentiPrenotazioni = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+const puoEsportareUtentiPrenotazioni = (ruolo) => ruolo === 'gestore' || ruolo === 'economo' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 const puoEsportarePrenotazioniSegnalazioni = (ruolo) => ruolo === 'gestore' || ruolo === 'economo';
 const puoResettareDati = (ruolo) => ruolo === 'gestore';
 const puoVedereRegistroAttivita = (ruolo) => ruolo === 'gestore' || ruolo === 'economo';
@@ -201,22 +220,24 @@ const puoVedereRegistroAttivita = (ruolo) => ruolo === 'gestore' || ruolo === 'e
 // NUOVE FUNZIONI PER PROFILI E CLASSI
 const puoVedereProfili = (ruolo) => 
   ruolo === 'gestore' || 
+  ruolo === 'economo' ||
   RUOLI_TIPO_SEGRETERIA.includes(ruolo) ||
   ruolo === 'presideAbm' ||
   ruolo === 'oratorio';
 
 const puoModificareProfili = (ruolo) =>
   ruolo === 'gestore' ||
+  ruolo === 'economo' ||
   ruolo === 'segreteria' ||
   ruolo === 'segreteriaSBase' ||
   ruolo === 'presideIpi' ||
   ruolo === 'vicePresideIpi';
 
 const puoGestireClassi = (ruolo) =>
-  ruolo === 'gestore' || ruolo === 'segreteria' || ruolo === 'segreteriaSBase';
+  ruolo === 'gestore' || ruolo === 'economo' || ruolo === 'segreteria' || ruolo === 'segreteriaSBase';
 
 const puoCreareRuoliPersonalizzati = (ruolo) => 
-  ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+  ruolo === 'gestore' || ruolo === 'economo' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 
 const puoAssegnarePermessiRuoliPersonalizzati = (ruolo) =>
   ruolo === 'gestore';
@@ -230,7 +251,7 @@ const puoGestireManuali = (ruolo) => ruolo === 'gestore';
 // gli stessi ruoli che gestiscono utenti e prenotazioni. Tutti gli altri
 // ruoli (studenti, insegnanti, TEVT, utente generico) vedono nello stesso
 // pulsante solo la guida interattiva, non i manuali amministrativi.
-const puoVedereManualiAmministrativi = (ruolo) => ruolo === 'gestore' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
+const puoVedereManualiAmministrativi = (ruolo) => ruolo === 'gestore' || ruolo === 'economo' || RUOLI_TIPO_SEGRETERIA.includes(ruolo);
 
 // Configurazione righe della tabella permessi (Impostazioni Avanzate).
 // Ogni riga rappresenta un singolo permesso, raggruppato per categoria.
@@ -301,6 +322,7 @@ const etichettaRuolo = (ruolo, currentLang) => {
   if (ruolo === 'presideAbm') return currentLang === 'ar' ? 'مدير المدرسة الأساسية' : 'PRESIDE S. BASE';
   if (ruolo === 'oratorio') return currentLang === 'ar' ? 'الأوراتوريو' : 'ORATORIO';
   if (ruolo === 'TEVT') return currentLang === 'ar' ? 'TEVT' : 'TEVT';
+  if (ruolo === 'segreteriaTevt') return currentLang === 'ar' ? 'سكرتارية TEVT' : 'SEGRETERIA TEVT';
   return currentLang === 'ar' ? 'مستخدم' : 'UTENTE';
 };
 
@@ -308,6 +330,7 @@ const SEZIONI_TRADUZIONI_AR = {
   'Scuola Base': 'التعليم الأساسي',
   'Scuola Media': 'المدرسة الاعدادية',
   'Scuola Professionale': 'المعهد الصناعى',
+  'TEVT': 'TEVT',
   'Comuni': 'مناطق مشتركة'
 };
 const etichettaSezione = (nome, currentLang) => {
@@ -499,6 +522,12 @@ const t = (key, lang, ...args) => {
       sicuroDiCancellare: 'Sicuro di cancellare?',
       haiGiaUnaRichiesta: "Hai già una richiesta/prenotazione per questa data e fascia oraria in un'altra aula.",
       richiestaInviata: 'Richiesta Inviata!',
+      prenotazioneConfermataAuto: 'Prenotazione confermata!',
+      classiVoce: 'Classi',
+      classiConteggio: (n) => (n === 1 ? '1 classe' : `${n} classi`),
+      annoClasse: 'Anno:',
+      annoAuto: 'Auto',
+      classiGestiteDaImpostazioni: 'Le classi sono aule della voce fissa "Classi": nome, capienza e anno si modificano da Impostazioni → Classi; da qui puoi solo bloccarle.',
       ripetiSettimanalmente: 'Ripeti ogni settimana',
       finoAl: 'Fino al:',
       ripetizioneRiepilogo: (n, giorno) => `Verranno create ${n} richieste, ogni ${giorno}.`,
@@ -507,6 +536,11 @@ const t = (key, lang, ...args) => {
       prenotazioniSpeciali: 'Prenotazioni Speciali',
       etichettaSpeciale: 'SPECIALE',
       speciali: 'Speciali',
+      avvisoAnticipoInsufficienteTitolo: 'Troppo vicino alla data',
+      avvisoAnticipoInsufficiente: (giorni) => `Non puoi prenotare con meno di ${giorni} giorn${giorni === 1 ? 'o' : 'i'} di anticipo. Vuoi inviare comunque una richiesta speciale? Dovrà essere approvata esplicitamente da un responsabile prima di diventare una prenotazione valida.`,
+      inviaRichiestaSpeciale: 'Invia richiesta speciale',
+      motivoSpecialeAnticipoInsufficiente: 'Motivo: anticipo insufficiente',
+      motivoSpecialeRipetizioneOltreLimite: 'Motivo: ripetizione oltre il limite normale',
       legendaNessunaAttesa: 'Nessuna in attesa',
       legendaInAttesa: 'Prenotazioni in attesa',
       torna: 'Indietro',
@@ -580,6 +614,10 @@ const t = (key, lang, ...args) => {
       resetTipoManutenzione: 'Segnalazioni Manutenzione',
       resetTipoUtenti: 'Utenti',
       impostazioniMenuSottotitolo: 'Tocca una voce per aprirla',
+      settingsGruppoPreferenze: 'Preferenze e notifiche',
+      settingsGruppoUtenti: 'Utenti e permessi',
+      settingsGruppoClassiAule: 'Classi e aule',
+      settingsGruppoSicurezza: 'Sicurezza e dati',
       eseguiResetManutenzione: 'Esegui Reset Segnalazioni Manutenzione',
       mensile: 'Mensile',
       annuale: 'Annuale',
@@ -593,6 +631,8 @@ const t = (key, lang, ...args) => {
       eliminareGruppoConferma: (n) => `Eliminare tutte le ${n} prenotazioni di questo blocco ripetuto? L'operazione non può essere annullata.`,
       navManutenzione: 'Manutenzione',
       confermaEliminaArchivioManutenzione: (n) => `Eliminare le ${n} segnalazioni archiviate nel periodo selezionato? L'operazione non può essere annullata.`,
+      confermaEliminaArchivioManutenzioneNonRisolte: (n, m) => `Eliminare ${n} segnalazioni nel periodo selezionato, di cui ${m} NON ancora risolte (ancora aperte)? L'operazione non può essere annullata.`,
+      eliminaAncheNonRisolte: 'Elimina anche le segnalazioni non risolte',
       archivioManutenzioneEliminato: (n) => n > 0 ? `${n} segnalazioni eliminate dall'archivio.` : 'Nessuna segnalazione da eliminare in questo periodo.',
       nuovaSegnalazione: '+ Nuova Segnalazione',
       segnalaGuasto: 'Segnala un guasto',
@@ -735,6 +775,31 @@ const t = (key, lang, ...args) => {
       sezAulaStudio: 'Aula Studio',
       sezManuali: 'Manuali',
 
+      // ---- WIZARD CONFIGURAZIONE INIZIALE ----
+      wizardConfigVoceMenu: 'Configurazione guidata',
+      wizardConfigSottotitolo: 'Configura in sequenza Classi, Aule, Fasce orarie Aula Studio e Ferie. Puoi riaprirlo in qualsiasi momento per completare o correggere.',
+      wizardConfigPasso: (n, totale) => `Passo ${n} di ${totale}`,
+      wizardConfigPassoClassiTitolo: 'Classi',
+      wizardConfigPassoAuleTitolo: 'Aule',
+      wizardConfigPassoFasceAuleTitolo: 'Fasce orarie Aule',
+      wizardConfigFasceAuleSpiegazione: 'Un\'unica configurazione di fasce orarie, condivisa da tutte le aule di tutte le sezioni (Scuola Base, Scuola Media, Scuola Professionale, Comuni) — separata dalle fasce di Aula Studio.',
+      wizardConfigAnticipoMinimoLabel: 'Giorni minimi di anticipo',
+      wizardConfigAnticipoMinimoSpiegazione: 'Numero minimo di giorni di anticipo richiesti per prenotare un\'aula generale, unico per tutte le sezioni (Scuola Base, Scuola Media, Scuola Professionale, Comuni). Chi prova a prenotare più vicino alla data può comunque inviare una richiesta speciale, da approvare esplicitamente.',
+      wizardConfigPassoFasceTitolo: 'Fasce orarie Aula Studio',
+      wizardConfigPassoFerieTitolo: 'Ferie',
+      wizardConfigIndietro: '‹ Indietro',
+      wizardConfigAvanti: 'Avanti ›',
+      wizardConfigFine: 'Fine',
+      wizardConfigNomeItObbligatorio: "Il nome in italiano è obbligatorio.",
+      wizardConfigNomeArObbligatorio: 'Il nome in arabo è obbligatorio.',
+      wizardConfigCapienzaObbligatoria: 'Inserisci la capienza.',
+      wizardConfigPostiObbligatori: 'Inserisci il numero di posti.',
+      wizardConfigNomeArPlaceholder: 'Nome in arabo',
+      wizardConfigTabAulaStudioMedie: 'Aula Studio · Medie',
+      wizardConfigTabAulaStudioIpi: 'Aula Studio · IPI',
+      wizardConfigCreaAulaStudioPrima: 'Crea prima almeno un\'aula Aula Studio nel passo "Aule".',
+      wizardConfigFerieSpiegazione: 'Queste date verranno applicate a tutte le aule Aula Studio esistenti (Medie e IPI).',
+
       // ---- AULA STUDIO ----
       navAulaStudio: 'Aula Studio',
       successo: 'Successo',
@@ -750,6 +815,13 @@ const t = (key, lang, ...args) => {
       aulaStudioTitoloSezione: 'Aula Studio',
       aulaStudioSchedaPrenota: 'Prenota',
       aulaStudioSchedaMiePrenotazioni: 'Le mie prenotazioni',
+      aulaStudioPrenotazioniSospeseTitolo: 'Prenotazioni sospese',
+      aulaStudioPrenotazioniSospeseTesto: 'Le nuove prenotazioni per questa Aula Studio sono sospese al momento. Riprova più tardi.',
+      aulaStudioImpostazioniPrenotazioniSezione: 'Prenotazioni',
+      aulaStudioImpostazioniPrenotazioniMedie: 'Prenotazioni Medie',
+      aulaStudioImpostazioniPrenotazioniIpi: 'Prenotazioni IPI',
+      aulaStudioPrenotazioniAttivo: 'Attivo',
+      aulaStudioPrenotazioniSospeso: 'Sospeso',
       aulaStudioScegliAula: "Scegli l'aula",
       aulaStudioScegliGiorno: 'Scegli il giorno',
       aulaStudioNessunGiornoDisponibile: 'Nessun giorno disponibile per la prenotazione al momento.',
@@ -985,6 +1057,12 @@ const t = (key, lang, ...args) => {
       sicuroDiCancellare: 'هل أنت متأكد من الحذف؟',
       haiGiaUnaRichiesta: 'لديك بالفعل طلب/حجز لهذا التاريخ والفترة الزمنية في قاعة أخرى.',
       richiestaInviata: 'تم إرسال الطلب!',
+      prenotazioneConfermataAuto: 'تم تأكيد الحجز!',
+      classiVoce: 'الفصول',
+      classiConteggio: (n) => (n === 1 ? 'فصل واحد' : `${numArabo(n, 'ar')} فصول`),
+      annoClasse: 'السنة:',
+      annoAuto: 'تلقائي',
+      classiGestiteDaImpostazioni: 'الفصول هي قاعات البند الثابت "الفصول": يتم تعديل الاسم والسعة والسنة من الإعدادات ← الفصول؛ ومن هنا يمكنك حظرها فقط.',
       ripetiSettimanalmente: 'تكرار أسبوعي',
       finoAl: 'حتى تاريخ:',
       ripetizioneRiepilogo: (n, giorno) => `سيتم إنشاء ${n} طلبات، كل يوم ${giorno}.`,
@@ -993,6 +1071,11 @@ const t = (key, lang, ...args) => {
       prenotazioniSpeciali: 'حجوزات خاصة',
       etichettaSpeciale: 'خاص',
       speciali: 'خاصة',
+      avvisoAnticipoInsufficienteTitolo: 'قريب جدًا من التاريخ',
+      avvisoAnticipoInsufficiente: (giorni) => `لا يمكنك الحجز بأقل من ${giorni} يوم/أيام مسبقًا. هل تريد إرسال طلب خاص رغم ذلك؟ سيحتاج إلى موافقة صريحة من أحد المسؤولين قبل أن يصبح حجزًا صالحًا.`,
+      inviaRichiestaSpeciale: 'إرسال طلب خاص',
+      motivoSpecialeAnticipoInsufficiente: 'السبب: مهلة الحجز غير كافية',
+      motivoSpecialeRipetizioneOltreLimite: 'السبب: التكرار يتجاوز الحد الطبيعي',
       legendaNessunaAttesa: 'لا توجد طلبات معلقة',
       legendaInAttesa: 'طلبات معلقة',
       torna: 'رجوع',
@@ -1066,6 +1149,10 @@ const t = (key, lang, ...args) => {
       resetTipoManutenzione: 'بلاغات الصيانة',
       resetTipoUtenti: 'المستخدمون',
       impostazioniMenuSottotitolo: 'اضغط على عنصر لفتحه',
+      settingsGruppoPreferenze: 'التفضيلات والإشعارات',
+      settingsGruppoUtenti: 'المستخدمون والصلاحيات',
+      settingsGruppoClassiAule: 'الفصول والقاعات',
+      settingsGruppoSicurezza: 'الأمان والبيانات',
       eseguiResetManutenzione: 'تنفيذ إعادة ضبط بلاغات الصيانة',
       mensile: 'شهري',
       annuale: 'سنوي',
@@ -1079,6 +1166,8 @@ const t = (key, lang, ...args) => {
       eliminareGruppoConferma: (n) => `حذف جميع الحجوزات الـ ${n} الخاصة بهذه المجموعة المتكررة؟ لا يمكن التراجع عن هذا الإجراء.`,
       navManutenzione: 'الصيانة',
       confermaEliminaArchivioManutenzione: (n) => `هل تريد حذف ${n} بلاغات مؤرشفة في الفترة المحددة؟ لا يمكن التراجع عن هذا الإجراء.`,
+      confermaEliminaArchivioManutenzioneNonRisolte: (n, m) => `هل تريد حذف ${n} بلاغات في الفترة المحددة، منها ${m} لم يتم حلها بعد (لا تزال مفتوحة)؟ لا يمكن التراجع عن هذا الإجراء.`,
+      eliminaAncheNonRisolte: 'حذف البلاغات غير المحلولة أيضاً',
       archivioManutenzioneEliminato: (n) => n > 0 ? `تم حذف ${n} بلاغات من الأرشيف.` : 'لا توجد بلاغات للحذف في هذه الفترة.',
       nuovaSegnalazione: '+ بلاغ جديد',
       segnalaGuasto: 'الإبلاغ عن عطل',
@@ -1221,6 +1310,31 @@ const t = (key, lang, ...args) => {
       sezAulaStudio: 'قاعة الدراسة',
       sezManuali: 'الأدلة',
 
+      // ---- معالج التهيئة الأولية (عربي) ----
+      wizardConfigVoceMenu: 'معالج الإعداد',
+      wizardConfigSottotitolo: 'قم بإعداد الفصول والقاعات والفترات الزمنية لقاعة الدراسة والعطلات بالترتيب. يمكنك إعادة فتحه في أي وقت للإكمال أو التصحيح.',
+      wizardConfigPasso: (n, totale) => `الخطوة ${n} من ${totale}`,
+      wizardConfigPassoClassiTitolo: 'الفصول',
+      wizardConfigPassoAuleTitolo: 'القاعات',
+      wizardConfigPassoFasceAuleTitolo: 'الفترات الزمنية للقاعات',
+      wizardConfigFasceAuleSpiegazione: 'إعداد واحد للفترات الزمنية، مشترك بين جميع القاعات في جميع الأقسام (الأساسية، الإعدادية، المهنية، المشتركة) — منفصل عن فترات قاعة الدراسة.',
+      wizardConfigAnticipoMinimoLabel: 'الحد الأدنى لأيام الحجز المسبق',
+      wizardConfigAnticipoMinimoSpiegazione: 'الحد الأدنى لعدد أيام الحجز المسبق اللازمة لحجز قاعة عامة، رقم واحد مشترك بين جميع الأقسام (الأساسية، الإعدادية، المهنية، المشتركة). من يحاول الحجز بمهلة أقصر يمكنه رغم ذلك إرسال طلب خاص، يحتاج إلى موافقة صريحة.',
+      wizardConfigPassoFasceTitolo: 'الفترات الزمنية لقاعة الدراسة',
+      wizardConfigPassoFerieTitolo: 'العطلات',
+      wizardConfigIndietro: '‹ السابق',
+      wizardConfigAvanti: 'التالي ›',
+      wizardConfigFine: 'إنهاء',
+      wizardConfigNomeItObbligatorio: 'الاسم بالإيطالية مطلوب.',
+      wizardConfigNomeArObbligatorio: 'الاسم بالعربية مطلوب.',
+      wizardConfigCapienzaObbligatoria: 'أدخل السعة.',
+      wizardConfigPostiObbligatori: 'أدخل عدد المقاعد.',
+      wizardConfigNomeArPlaceholder: 'الاسم بالعربية',
+      wizardConfigTabAulaStudioMedie: 'قاعة الدراسة · الإعدادية',
+      wizardConfigTabAulaStudioIpi: 'قاعة الدراسة · المعهد الصناعي',
+      wizardConfigCreaAulaStudioPrima: 'أنشئ أولاً قاعة دراسة واحدة على الأقل في خطوة "القاعات".',
+      wizardConfigFerieSpiegazione: 'سيتم تطبيق هذه التواريخ على جميع قاعات الدراسة الحالية (الإعدادية والمعهد الصناعي).',
+
       // ---- AULA STUDIO (عربي) ----
       navAulaStudio: 'قاعة الدراسة',
       successo: 'تم بنجاح',
@@ -1236,6 +1350,13 @@ const t = (key, lang, ...args) => {
       aulaStudioTitoloSezione: 'قاعة الدراسة',
       aulaStudioSchedaPrenota: 'حجز',
       aulaStudioSchedaMiePrenotazioni: 'حجوزاتي',
+      aulaStudioPrenotazioniSospeseTitolo: 'الحجوزات معلّقة',
+      aulaStudioPrenotazioniSospeseTesto: 'الحجوزات الجديدة لهذه القاعة معلّقة حاليًا. حاول مرة أخرى لاحقًا.',
+      aulaStudioImpostazioniPrenotazioniSezione: 'الحجوزات',
+      aulaStudioImpostazioniPrenotazioniMedie: 'حجوزات الإعدادية',
+      aulaStudioImpostazioniPrenotazioniIpi: 'حجوزات المعهد الصناعي',
+      aulaStudioPrenotazioniAttivo: 'مفعّل',
+      aulaStudioPrenotazioniSospeso: 'معلّق',
       aulaStudioScegliAula: 'اختر القاعة',
       aulaStudioScegliGiorno: 'اختر اليوم',
       aulaStudioNessunGiornoDisponibile: 'لا يوجد يوم متاح للحجز حاليًا.',
@@ -1342,21 +1463,33 @@ const mostraAlert = (titolo, messaggio) => {
 };
 
 // ---- Notifiche push (Expo) ----
-// Definisce come le notifiche vengono mostrate quando l'app è in primo piano.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// Da SDK 53, expo-notifications non è più utilizzabile dentro Expo Go: il solo import del
+// modulo (a prescindere da come viene usato) lancia un'eccezione su Android — vedi
+// https://docs.expo.dev/develop/development-builds/introduction/. Caricato quindi solo fuori
+// da Expo Go: dentro Expo Go l'app resta perfettamente funzionante, semplicemente senza
+// notifiche push (il centro notifiche in-app, salvato su Firestore, non dipende da questo).
+const Notifications: typeof import('expo-notifications') | null = isRunningInExpoGo()
+  ? null
+  : require('expo-notifications');
 
-/** Richiede il permesso, registra il canale Android e restituisce il token push del dispositivo (null su web o se negato). */
+// Definisce come le notifiche vengono mostrate quando l'app è in primo piano.
+if (Notifications) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
+
+/** Richiede il permesso, registra il canale Android e restituisce il token push del dispositivo (null su web, in Expo Go, o se negato). */
 const registraPushTokenDispositivo = async () => {
   try {
     if (Platform.OS === 'web') return null;
+    if (!Notifications) return null;
     if (!Device.isDevice) return null;
 
     if (Platform.OS === 'android') {
@@ -1476,7 +1609,7 @@ const getCategorieVisibili = (ruolo, lang) => {
 };
 
 
-const TIPI_REGISTRO = {
+export const TIPI_REGISTRO = {
   CREAZIONE_UTENTE: 'creazione_utente',
   MODIFICA_RUOLO_UTENTE: 'modifica_ruolo_utente',
   ELIMINAZIONE_UTENTE: 'eliminazione_utente',
@@ -1555,11 +1688,55 @@ export default function App() {
   const [richiestaTurnoDaAprireId, setRichiestaTurnoDaAprireId] = useState<string | null>(null);
 
   const [aule, setAule] = useState<any[]>([]);
+  // Fasce orarie delle aule generali: un'unica configurazione condivisa da tutte le sezioni
+  // (Scuola Base, Media, Professionale, Comuni), modificabile da Impostazioni → Configurazione
+  // guidata. Sostituisce la vecchia costante fissa FASCE_ORARIE.
+  const { fasce: fasceOrarieAule } = useFasceOrarieAule(db);
+  const FASCE_ORARIE = useMemo(() => fasceOrarieAuleComeStringhe(fasceOrarieAule), [fasceOrarieAule]);
+  // Giorni minimi di anticipo richiesti per prenotare un'aula generale (Scuola Base, Media,
+  // Professionale, Comuni), configurabile da Impostazioni → Configurazione guidata → Aule.
+  // Sotto questo limite l'utente può comunque inviare una richiesta speciale (vedi
+  // inviaPrenotazione), che finisce in Gestione Prenotazioni → ★ Speciali come le ricorrenti
+  // oltre il limite normale, con lo stesso identico iter di approvazione.
+  const { regole: regolePrenotazioneAule } = useRegolePrenotazioneAule(db);
   const [prenotazioni, setPrenotazioni] = useState<any[]>([]);
   const [dominiLista, setDominiLista] = useState<any[]>([]);
   const [classiLista, setClassiLista] = useState<any[]>([]);
   const [utentiLista, setUtentiLista] = useState<any[]>([]);
   const [sezioniLista, setSezioniLista] = useState<any[]>([]);
+
+  // ---- SEZIONI FISSE E CLASSI-COME-AULE ----
+  // La sezione scelta è la Scuola Professionale? (si riconosce dalla chiave interna, non dal nome:
+  // si può rinominare la sezione senza rompere il modulo di prenotazione.)
+  const isSezioneProfessionale = chiaveDaNomeSezione(sezioneSelezionata, sezioniLista) === 'professionale';
+  // Le classi di Impostazioni → Classi sono le aule della voce fissa "Classi": IPI → Scuola Professionale,
+  // Medie → Scuola Base. Nessun doppio elenco: sono calcolate dalle classi, non salvate tra le aule.
+  const auleClassi = useMemo(() => {
+    const nomeSezionePer = (chiave: string) => {
+      const sez = sezioniLista.find((x) => chiaveSezione(x) === chiave);
+      return sez ? sez.nome : null;
+    };
+    const nomeBase = nomeSezionePer('base');
+    const nomeProf = nomeSezionePer('professionale');
+    return classiLista
+      .filter((c) => (c.tipo === 'ipi' && nomeProf) || (c.tipo === 'medie' && nomeBase))
+      .map((c) => ({
+        id: `classe_${c.id}`,
+        classeId: c.id,
+        nome: c.nome,
+        capienza: c.capienza ? String(c.capienza) : '',
+        sezione: c.tipo === 'ipi' ? nomeProf : nomeBase,
+        ordine: c.ordine ?? 0,
+        daClasse: true,
+        anno: c.tipo === 'ipi' ? annoClasse(c) : null,
+        // Nome arabo: solo per le classi di Scuola Base (es. "1 Elem. A" → "١ ابتدائى أ"); le IPI restano in italiano.
+        nomeAr: c.tipo === 'medie' ? traduciNomeClasseAr(c.nome) : '',
+      }));
+  }, [classiLista, sezioniLista]);
+  const auleTutte = useMemo(() => [...aule, ...auleClassi], [aule, auleClassi]);
+  // Dentro Scuola Base / Scuola Professionale: la voce "Classi" è una scheda che apre la pagina con tutte le classi.
+  const [classiAperte, setClassiAperte] = useState(false);
+  useEffect(() => { setClassiAperte(false); }, [sezioneSelezionata, vistaAttiva]);
 
   // ---- STATI PER MODALITÀ MODIFICA E GESTIONE ----
   const [nuovaSezioneNome, setNuovaSezioneNome] = useState('');
@@ -1599,6 +1776,8 @@ export default function App() {
   const [archivioManutenzioneMeseSelezionato, setArchivioManutenzioneMeseSelezionato] = useState(new Date().toISOString().slice(0, 7));
   const [archivioManutenzioneAnnoSelezionato, setArchivioManutenzioneAnnoSelezionato] = useState(String(new Date().getFullYear()));
   const [archivioManutenzioneMeseDropdownAperto, setArchivioManutenzioneMeseDropdownAperto] = useState(false);
+  // Reset segnalazioni: di base elimina solo le "Risolto"; spuntando questa casella elimina anche quelle ancora aperte (es. di aule cancellate).
+  const [archivioManutenzioneIncludiNonRisolte, setArchivioManutenzioneIncludiNonRisolte] = useState(false);
 
   // ---- CALENDARIO ----
   const [calendarioMeseSelezionato, setCalendarioMeseSelezionato] = useState<any>(null);
@@ -1663,6 +1842,10 @@ export default function App() {
 
   // ---- IMPOSTAZIONI ----
   const [impostazioniVista, setImpostazioniVista] = useState('menu');
+  // Menu Impostazioni: accordion a gruppo singolo — null = tutti i gruppi chiusi, altrimenti la key
+  // del gruppo aperto (aprirne un altro chiude automaticamente quello precedente).
+  const [gruppoImpostazioniAperto, setGruppoImpostazioniAperto] = useState<string | null>(null);
+  const apriGruppoImpostazioni = (chiave: string) => setGruppoImpostazioniAperto((corrente) => (corrente === chiave ? null : chiave));
   const [esportaTipoSelezionato, setEsportaTipoSelezionato] = useState('prenotazioni');
   const [righeEspanseBloccoUtenti, setRigheEspanseBloccoUtenti] = useState<Record<string, any>>({}); // solo Android: id utente -> true se la riga della tabella "Blocca" è aperta
   const [righeEspansePermessiAvanzati, setRigheEspansePermessiAvanzati] = useState<Record<string, any>>({}); // solo Android: id utente -> true se la riga della tabella "Impostazioni Avanzate" è aperta
@@ -1679,6 +1862,8 @@ export default function App() {
   const [nuovaClasseNome, setNuovaClasseNome] = useState('');
   const [classeInModifica, setClasseInModifica] = useState<any>(null);
   const [nuovaClasseTipo, setNuovaClasseTipo] = useState('medie');
+  const [nuovaClasseCapienza, setNuovaClasseCapienza] = useState('');
+  const [nuovaClasseAnno, setNuovaClasseAnno] = useState(''); // '' = automatico dal nome (solo IPI)
 
   // ---- NUOVI STATI PER PROFILI E SCADENZA ----
   const [profiloDaCompletare, setProfiloDaCompletare] = useState(false); // true se l'utente deve completare il profilo
@@ -1744,7 +1929,18 @@ export default function App() {
     if (currentLangArg === 'ar') {
       const aulaTrovata = aule.find((a) => a.nome === nome);
       if (aulaTrovata && aulaTrovata.nomeAr && aulaTrovata.nomeAr.trim()) return aulaTrovata.nomeAr.trim();
+      // Classi di Scuola Base: nome tradotto. Se una classe IPI ha lo stesso nome, resta in italiano.
+      const classiStessoNome = auleClassi.filter((a) => a.nome === nome);
+      if (classiStessoNome.length > 0 && classiStessoNome.every((a) => a.nomeAr)) return classiStessoNome[0].nomeAr;
     }
+    return nome;
+  };
+
+  // Nome di una classe per la visualizzazione (elenchi e selettori): arabo solo per le classi di Scuola Base.
+  const nomeClasseVisibile = (nome: string, currentLangArg = lang) => {
+    if (currentLangArg !== 'ar') return nome;
+    const stesse = classiLista.filter((c) => c.nome === nome);
+    if (stesse.length > 0 && stesse.every((c) => c.tipo === 'medie')) return traduciNomeClasseAr(nome);
     return nome;
   };
 
@@ -2230,8 +2426,8 @@ export default function App() {
         const auleIniziali = [
           { nome: 'Aula Magna', nomeAr: 'القاعة الكبرى', capienza: '120', sezione: 'Scuola Base', ordine: 0 },
           { nome: 'Laboratorio 1', nomeAr: 'المختبر ١', capienza: '25', sezione: 'Scuola Base', ordine: 1 },
-          { nome: 'Aula 1A', nomeAr: 'فصل ١أ', capienza: '30', sezione: 'Scuola Media', ordine: 0 },
-          { nome: 'Aula 2B', nomeAr: 'فصل ٢ب', capienza: '28', sezione: 'Scuola Media', ordine: 1 },
+          { nome: 'Aula 1A', nomeAr: 'فصل ١أ', capienza: '30', sezione: 'Scuola Base', ordine: 0 },
+          { nome: 'Aula 2B', nomeAr: 'فصل ٢ب', capienza: '28', sezione: 'Scuola Base', ordine: 1 },
           { nome: 'Officina Meccanica', nomeAr: 'ورشة الميكانيكا', capienza: '20', sezione: 'Scuola Professionale', ordine: 0 },
           { nome: 'Lab Elettrico', nomeAr: 'مختبر الكهرباء', capienza: '18', sezione: 'Scuola Professionale', ordine: 1 },
           { nome: 'Sala Consiliare', nomeAr: 'قاعة المجلس', capienza: '50', sezione: 'Comuni', ordine: 0 },
@@ -2274,7 +2470,24 @@ export default function App() {
         const snapSezioni2 = await getDocs(collection(db, 'sezioni'));
         sezioniArr = snapSezioni2.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
       }
-      setSezioniLista(sezioniArr.sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)));
+      // Sezioni fisse: ogni sezione riconosciuta riceve una CHIAVE permanente (base, professionale, tevt,
+      // comuni). La chiave non cambia quando si rinomina la sezione e non permette di eliminarla.
+      // Una sola sezione per chiave; il Direttore la salva nel database la prima volta che apre l'app.
+      sezioniArr.sort((a: any, b: any) => (a.ordine ?? 0) - (b.ordine ?? 0));
+      const chiaviUsate = new Set<string>(sezioniArr.filter((x: any) => x.chiave).map((x: any) => x.chiave));
+      const daSalvare: any[] = [];
+      sezioniArr = sezioniArr.map((x: any) => {
+        if (x.chiave || x.speciale) return x;
+        const k = chiaveSezione(x);
+        if (!k || chiaviUsate.has(k)) return x;
+        chiaviUsate.add(k);
+        daSalvare.push({ id: x.id, chiave: k });
+        return { ...x, chiave: k };
+      });
+      if (daSalvare.length > 0 && userRole === 'gestore') {
+        Promise.all(daSalvare.map((x) => updateDoc(doc(db, 'sezioni', x.id), { chiave: x.chiave }))).catch((e) => console.warn('Chiavi sezioni non salvate:', e));
+      }
+      setSezioniLista(sezioniArr);
 
       const snapManutenzione = await getDocs(collection(db, 'manutenzione'));
       setManutenzioneLista(snapManutenzione.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -2623,16 +2836,50 @@ export default function App() {
     );
   };
 
-  const inviaPrenotazione = async () => {
+  // Giorni di calendario tra oggi e la data scelta (entrambe portate a mezzanotte locale, per
+  // evitare differenze dovute all'ora corrente) — usato per il controllo dei giorni minimi di
+  // anticipo (regolePrenotazioneAule.anticipoMinimoGiorni). Volutamente indipendente dalle
+  // utility "giorni lavorativi" di Aula Studio: qui non esistono giorni di chiusura settimanale.
+  const calcolaGiorniAnticipo = (dataObj) => {
+    const oggiMezzanotte = new Date();
+    oggiMezzanotte.setHours(0, 0, 0, 0);
+    const dataMezzanotte = new Date(dataObj);
+    dataMezzanotte.setHours(0, 0, 0, 0);
+    return Math.round((dataMezzanotte.getTime() - oggiMezzanotte.getTime()) / 86400000);
+  };
+
+  // Mostra l'avviso "troppo vicino alla data" con la scelta di inviare comunque una richiesta
+  // speciale (stesso pattern conferma web/nativo già usato per le cancellazioni in questo file).
+  // Se l'utente accetta, richiama eseguiInvioPrenotazione forzando l'invio come richiesta
+  // speciale: finirà in Gestione Prenotazioni → ★ Speciali, da approvare esplicitamente da un
+  // responsabile — nessuna prenotazione viene creata finché non viene accettata qui sotto.
+  const mostraConfirmRichiestaSpecialeAnticipo = () => {
+    const messaggio = t('avvisoAnticipoInsufficiente', lang, regolePrenotazioneAule.anticipoMinimoGiorni);
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(messaggio)) eseguiInvioPrenotazione(true);
+    } else {
+      Alert.alert(t('avvisoAnticipoInsufficienteTitolo', lang), messaggio, [
+        { text: t('annulla', lang) },
+        { text: t('inviaRichiestaSpeciale', lang), onPress: () => eseguiInvioPrenotazione(true) },
+      ]);
+    }
+  };
+
+  const inviaPrenotazione = async () => eseguiInvioPrenotazione(false);
+
+  // forzaRichiestaSpeciale: true solo quando richiamata dalla conferma di
+  // mostraConfirmRichiestaSpecialeAnticipo sopra — salta il blocco per anticipo insufficiente e
+  // marca la prenotazione come richiesta speciale invece di procedere come prenotazione normale.
+  const eseguiInvioPrenotazione = async (forzaRichiestaSpeciale) => {
     if (!motivo.trim() || fasceSelezionate.length === 0) {
       mostraAlert(t('attenzione', lang), t('compilaMotivoFascia', lang));
       return;
     }
-    if (sezioneSelezionata === 'Scuola Professionale' && !studenteIPI) {
+    if (isSezioneProfessionale && !studenteIPI) {
       mostraAlert(t('attenzione', lang), t('studenteIPIObbligatorioMessaggio', lang));
       return;
     }
-    if (sezioneSelezionata === 'Scuola Professionale' && studenteIPI === 'si' && !classe.trim()) {
+    if (isSezioneProfessionale && studenteIPI === 'si' && !classe.trim()) {
       mostraAlert(t('attenzione', lang), t('classeObbligatoriaMessaggio', lang));
       return;
     }
@@ -2645,12 +2892,26 @@ export default function App() {
       return;
     }
 
+    // Direttore ed Economo: nessuna attesa. Niente blocco per anticipo e prenotazione subito approvata.
+    const autoApprova = approvazioneAutomatica(userRole);
+    const anticipoInsufficiente = !autoApprova && calcolaGiorniAnticipo(dataPrenotazioneObj) < regolePrenotazioneAule.anticipoMinimoGiorni;
+    if (anticipoInsufficiente && !forzaRichiestaSpeciale) {
+      mostraConfirmRichiestaSpecialeAnticipo();
+      return;
+    }
+
     const dateDaPrenotare = ripeti
       ? generaDateRipetizione(dataPrenotazioneObj, dataFineRipetizione)
       : [dataPrenotazione];
 
     const gruppoRipetizione = ripeti ? `${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
-    const richiedeAutorizzazioneSpeciale = ripeti && dataFineRipetizione > limiteNormaleStr;
+    const richiedeAutorizzazioneSpecialeRipetizione = ripeti && dataFineRipetizione > limiteNormaleStr;
+    const richiedeAutorizzazioneSpeciale = !autoApprova && (richiedeAutorizzazioneSpecialeRipetizione || anticipoInsufficiente);
+    // anticipoInsufficiente ha la precedenza come motivo mostrato al responsabile: i due casi si
+    // escludono quasi sempre a vicenda, e se capitassero insieme è comunque quello più urgente.
+    const motivoSpeciale = anticipoInsufficiente
+      ? 'anticipoInsufficiente'
+      : (richiedeAutorizzazioneSpecialeRipetizione ? 'ripetizioneOltreLimite' : null);
 
     let conflittoPersonale = false;
     let saltate = 0;
@@ -2677,15 +2938,15 @@ export default function App() {
           data: dataSingola,
           fasce: fasceSelezionate,
           motivo: motivo.trim(),
-          studenteIPI: sezioneSelezionata === 'Scuola Professionale' ? studenteIPI : null,
-          classe: sezioneSelezionata === 'Scuola Professionale' && studenteIPI === 'si' ? classe.trim() : '',
+          studenteIPI: isSezioneProfessionale ? studenteIPI : null,
+          classe: isSezioneProfessionale && studenteIPI === 'si' ? classe.trim() : '',
           insegnanteRiferimento: insegnanteRiferimento.trim(),
           partecipanti: partecipanti.map(p => p.trim()).filter(p => p !== ''),
           utenteNome: userName,
           utenteEmail: user.email,
-          stato: 'In attesa',
+          stato: autoApprova ? 'Approvata' : 'In attesa',
           ...(gruppoRipetizione ? { gruppoRipetizione } : {}),
-          ...(richiedeAutorizzazioneSpeciale ? { richiedeAutorizzazioneSpeciale: true } : {})
+          ...(richiedeAutorizzazioneSpeciale ? { richiedeAutorizzazioneSpeciale: true, ...(motivoSpeciale ? { motivoSpeciale } : {}) } : {})
         });
 
         await registraAttivita(
@@ -2695,8 +2956,15 @@ export default function App() {
       }
 
       // Notifica agli approvatori
-      const approvatori = utentiLista.filter(u => 
-        puoApprovarePrenotazioni(u.role) && u.id !== user.uid
+      // Solo chi può approvare QUESTA prenotazione (reparto, classe, orario) riceve l'avviso.
+      // Se prenota Direttore/Economo la prenotazione è già approvata: nessun avviso.
+      const contestoNuova = contestoApprovazione({
+        aulaId: aulaInPrenotazione.id,
+        sezione: aulaInPrenotazione.sezione || sezioneSelezionata,
+        fasce: fasceSelezionate,
+      });
+      const approvatori = autoApprova ? [] : utentiLista.filter(u =>
+        u.id !== user.uid && puoApprovareUtenteQuesta(u, contestoNuova)
       );
       if (approvatori.length > 0) {
         const titoloIt = t('notificaNuovaRichiestaTitolo', 'it', aulaInPrenotazione.nome);
@@ -2729,7 +2997,7 @@ export default function App() {
       } else if (conflittoPersonale) {
         mostraAlert(t('attenzione', lang), t('haiGiaUnaRichiesta', lang));
       } else {
-        mostraAlert('', t('richiestaInviata', lang));
+        mostraAlert('', t(autoApprova ? 'prenotazioneConfermataAuto' : 'richiestaInviata', lang));
       }
     } catch (e) {
       console.error('Errore:', e);
@@ -3055,6 +3323,8 @@ export default function App() {
   };
 
   const eliminaSezione = async (id) => {
+    // Le 4 sezioni fisse (con chiave) si possono rinominare ma non eliminare.
+    if (sezioniLista.find((x) => x.id === id)?.chiave) return;
     const esegui = async () => {
       await deleteDoc(doc(db, 'sezioni', id));
       caricaDatiGenerali();
@@ -3263,15 +3533,17 @@ export default function App() {
   const aggiungiClasse = async () => {
     if (!nuovaClasseNome.trim()) return;
     if (classeInModifica) {
-      await updateDoc(doc(db, 'classi', classeInModifica.id), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo });
+      await updateDoc(doc(db, 'classi', classeInModifica.id), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo, capienza: nuovaClasseCapienza.trim(), anno: nuovaClasseTipo === 'ipi' ? nuovaClasseAnno : '' });
       await registraAttivita(TIPI_REGISTRO.MODIFICA_CLASSE, `Classe ${classeInModifica.nome} rinominata in ${nuovaClasseNome.trim()}`);
       setClasseInModifica(null);
     } else {
-      await addDoc(collection(db, 'classi'), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo, ordine: classiLista.length });
+      await addDoc(collection(db, 'classi'), { nome: nuovaClasseNome.trim(), tipo: nuovaClasseTipo, ordine: classiLista.length, capienza: nuovaClasseCapienza.trim(), anno: nuovaClasseTipo === 'ipi' ? nuovaClasseAnno : '' });
       await registraAttivita(TIPI_REGISTRO.AGGIUNTA_CLASSE, `Classe ${nuovaClasseNome.trim()} aggiunta`);
     }
     setNuovaClasseNome('');
     setNuovaClasseTipo('medie');
+    setNuovaClasseCapienza('');
+    setNuovaClasseAnno('');
     setMostraFormAggiungiClasse(false);
     caricaDatiGenerali();
   };
@@ -3280,6 +3552,8 @@ export default function App() {
     setClasseInModifica(classeItem);
     setNuovaClasseNome(classeItem.nome);
     setNuovaClasseTipo(classeItem.tipo === 'ipi' ? 'ipi' : 'medie');
+    setNuovaClasseCapienza(classeItem.capienza ? String(classeItem.capienza) : '');
+    setNuovaClasseAnno(classeItem.anno ? String(classeItem.anno) : '');
     setMostraFormAggiungiClasse(true);
   };
 
@@ -3287,6 +3561,8 @@ export default function App() {
     setClasseInModifica(null);
     setNuovaClasseNome('');
     setNuovaClasseTipo('medie');
+    setNuovaClasseCapienza('');
+    setNuovaClasseAnno('');
     setMostraFormAggiungiClasse(false);
   };
 
@@ -3585,11 +3861,15 @@ export default function App() {
 
   const eliminaArchivioManutenzione = async () => {
     const chiave = archivioManutenzioneModalita === 'mensile' ? archivioManutenzioneMeseSelezionato : archivioManutenzioneAnnoSelezionato;
+    // Le risolte contano per la data di risoluzione; quelle non risolte (solo se la casella è spuntata)
+    // per la data della segnalazione.
     const daEliminare = manutenzioneLista.filter((s) => {
-      if (s.stato !== 'Risolto') return false;
-      const riferimento = s.tsRisoluzione || s.data || '';
+      const risolta = s.stato === 'Risolto';
+      if (!risolta && !archivioManutenzioneIncludiNonRisolte) return false;
+      const riferimento = risolta ? (s.tsRisoluzione || s.data || '') : (s.tsSegnalazione || s.data || '');
       return riferimento.startsWith(chiave);
     });
+    const nonRisolte = daEliminare.filter((s) => s.stato !== 'Risolto').length;
 
     const effettuaEliminazione = async () => {
       try {
@@ -3597,6 +3877,7 @@ export default function App() {
           await deleteDoc(doc(db, 'manutenzione', s.id));
         }
         setSegnalazioneDettaglio((prev) => (prev && daEliminare.some((s) => s.id === prev.id)) ? null : prev);
+        setArchivioManutenzioneIncludiNonRisolte(false);
         await caricaDatiGenerali();
         mostraAlert('', t('archivioManutenzioneEliminato', lang, daEliminare.length));
       } catch (e) {
@@ -3609,7 +3890,9 @@ export default function App() {
       mostraAlert('', t('archivioManutenzioneEliminato', lang, 0));
       return;
     }
-    const messaggioConferma = t('confermaEliminaArchivioManutenzione', lang, daEliminare.length);
+    const messaggioConferma = nonRisolte > 0
+      ? t('confermaEliminaArchivioManutenzioneNonRisolte', lang, daEliminare.length, nonRisolte)
+      : t('confermaEliminaArchivioManutenzione', lang, daEliminare.length);
     if (Platform.OS === 'web') {
       if (window.confirm(messaggioConferma)) await effettuaEliminazione();
     } else {
@@ -3897,6 +4180,25 @@ export default function App() {
   const canGestireUtenti = haPermesso(currentUserData, 'puoGestireUtenti', puoGestireUtenti);
   const canGestireDominiEmail = haPermesso(currentUserData, 'puoGestireDominiEmail', puoGestireDominiEmail);
   const canApprovarePrenotazioni = haPermesso(currentUserData, 'puoApprovarePrenotazioni', puoApprovarePrenotazioni);
+
+  // ---- APPROVAZIONI PER REPARTO (le regole sono in src/utils/regole-approvazione.ts) ----
+  const contestoApprovazione = ({ aulaId, sezione, fasce }: { aulaId?: string; sezione?: string; fasce?: string[] }) => {
+    const aulaDi = auleTutte.find((a) => a.id === aulaId);
+    return {
+      sezione: chiaveDaNomeSezione(aulaDi?.sezione || sezione, sezioniLista),
+      anno: aulaDi?.anno ?? null,
+      oraInizio: oraInizioDaFasce(fasce),
+    };
+  };
+  const puoApprovareUtenteQuesta = (utente, ctx) => {
+    if (!haPermesso(utente, 'puoApprovarePrenotazioni', puoApprovarePrenotazioni)) return false;
+    if (RUOLI_CON_AMBITO_APPROVAZIONE.includes(utente.role)) return puoApprovareRuolo(utente.role, ctx);
+    return true; // ruolo fuori dalle regole ma con il permesso concesso a mano: come prima
+  };
+  const puoApprovareQuesta = (p) =>
+    puoApprovareUtenteQuesta(currentUserData, contestoApprovazione({ aulaId: p.aulaId, sezione: p.sezione, fasce: p.fasce }));
+  // Ognuno vede e gestisce in "Gestione" solo le prenotazioni del proprio reparto.
+  const prenotazioniGestibili = prenotazioni.filter(puoApprovareQuesta);
   const canGestireAule = haPermesso(currentUserData, 'puoGestireAule', puoGestireAule);
   const canGestireManutenzione = haPermesso(currentUserData, 'puoGestireManutenzione', puoGestireManutenzione);
   const canEsportareUtentiPrenotazioni = haPermesso(currentUserData, 'puoEsportareUtentiPrenotazioni', puoEsportareUtentiPrenotazioni);
@@ -4372,7 +4674,7 @@ export default function App() {
                     const attivo = classeScelta === cls;
                     return (
                       <TouchableOpacity key={cls} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setClasseScelta(cls); setModalScegliClasseRegistrazione(false); }}>
-                        <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{cls}</Text>
+                        <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{nomeClasseVisibile(cls)}</Text>
                       </TouchableOpacity>
                     );
                   })
@@ -4635,19 +4937,52 @@ export default function App() {
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionHeaderTitle}>{risolviNomeSezione(sezioneSelezionata, lang)}</Text>
             </View>
-            {aule.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)).map((aula) => (
-              <View key={aula.id} style={styles.aulaCard}>
-                <View>
-                  <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
-                  <Text style={styles.aulaDesc}>{t('capienza', lang)}: {numArabo(aula.capienza, lang)}</Text>
+            {(() => {
+              const auleSezione = auleTutte.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0));
+              const classiSezione = auleSezione.filter((a) => a.daClasse);
+              const altreAule = auleSezione.filter((a) => !a.daClasse);
+              const cardAula = (aula) => (
+                <View key={aula.id} style={styles.aulaCard}>
+                  <View>
+                    <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
+                    {(!aula.daClasse || aula.capienza) ? (
+                      <Text style={styles.aulaDesc}>{t('capienza', lang)}: {numArabo(aula.capienza, lang)}</Text>
+                    ) : null}
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <TouchableOpacity style={styles.primaryButtonSmall} onPress={() => setAulaInPrenotazione(aula)}>
+                      <Text style={styles.buttonTextSmall}>{t('prenota', lang)}</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <TouchableOpacity style={styles.primaryButtonSmall} onPress={() => setAulaInPrenotazione(aula)}>
-                    <Text style={styles.buttonTextSmall}>{t('prenota', lang)}</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+              );
+              // Pagina "Classi": tutte le classi del reparto, schede identiche alle altre aule.
+              if (classiAperte && classiSezione.length > 0) {
+                return (
+                  <>
+                    <TouchableOpacity style={{ alignSelf: isRTL ? 'flex-end' : 'flex-start', marginBottom: 12 }} onPress={() => setClassiAperte(false)}>
+                      <Text style={styles.switchAuthText}>{isRTL ? '›' : '‹'} {t('torna', lang)}</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.sectionHeaderTitle, { fontSize: 15, marginBottom: 8 }]}>{t('classiVoce', lang)}</Text>
+                    {classiSezione.map(cardAula)}
+                  </>
+                );
+              }
+              return (
+                <>
+                  {classiSezione.length > 0 && (
+                    <TouchableOpacity key="voce-classi" style={styles.aulaCard} onPress={() => setClassiAperte(true)}>
+                      <View>
+                        <Text style={styles.aulaTitle}>{t('classiVoce', lang)}</Text>
+                        <Text style={styles.aulaDesc}>{t('classiConteggio', lang, classiSezione.length)}</Text>
+                      </View>
+                      <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {altreAule.map(cardAula)}
+                </>
+              );
+            })()}
           </ScrollView>
         )}
 
@@ -4837,7 +5172,7 @@ export default function App() {
 
         {/* ------ VISTA MANUTENZIONE ------ */}
         {vistaAttiva === 'manutenzione' && (() => {
-          const auleOrdinate = [...aule].sort((a, b) => (a.sezione || '').localeCompare(b.sezione || '') || (a.nome || '').localeCompare(b.nome || ''));
+          const auleOrdinate = [...auleTutte].sort((a, b) => (a.sezione || '').localeCompare(b.sezione || '') || (a.nome || '').localeCompare(b.nome || ''));
           const meseCorrenteYYYYMM = new Date().toISOString().slice(0, 7);
           const segnalazioniPropriaVisibilita = manutenzioneLista.filter((s) =>
             canGestireManutenzione || s.utenteEmail === user.email
@@ -4866,7 +5201,9 @@ export default function App() {
           return (
             <ScrollView contentContainerStyle={styles.bodyContent}>
               <View style={Platform.OS === 'web' ? styles.manutenzioneWebOuter : null}>
-              <View>
+              {/* Su web il blocco occupa tutta la larghezza del contenuto (come Home, Gestione e Impostazioni):
+                  prima si restringeva alla larghezza del contenuto e, con la lista vuota, restava stretto al centro. */}
+              <View style={Platform.OS === 'web' ? { width: '100%' } : undefined}>
               <View style={styles.sectionTitleRow}>
                 <Text style={styles.sectionHeaderTitle}>{t('navManutenzione', lang)}</Text>
                 <TouchableOpacity style={styles.addButton} onPress={() => setModalNuovaSegnalazione(true)}>
@@ -4912,7 +5249,9 @@ export default function App() {
                         : {};
                       return (
                         <RigaTabella key={riga.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]} {...propsRiga}>
-                          <Text style={[styles.tableCell, { flex: 1.4 }]} numberOfLines={1}>{risolviNomeAula(riga.aulaNome, lang)}{riga.sezione ? ` (${risolviNomeSezione(riga.sezione, lang)})` : ''}</Text>
+                          {/* Su Android, niente scroll orizzontale in questa vista compatta: il testo va a
+                              capo invece di troncare con "…" (stesso pattern già usato nella lista Utenti). */}
+                          <Text style={[styles.tableCell, { flex: 1.4 }]}>{risolviNomeAula(riga.aulaNome, lang)}{riga.sezione ? ` (${risolviNomeSezione(riga.sezione, lang)})` : ''}</Text>
                           <View style={styles.tableColStato}>
                             <View style={[styles.statoBadge, { backgroundColor: coloreStato(riga.stato) }]}>
                               <Text style={styles.statoBadgeText}>{etichettaStatoBreve(riga.stato)}</Text>
@@ -4924,7 +5263,10 @@ export default function App() {
                   </View>
                 ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
-                  <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 520 }]}>
+                  {/* minWidth:'100%' invece di un valore fisso: su schermi larghi la tabella usa
+                      tutto lo spazio disponibile nel contenitore (fino a bodyContent, 820px)
+                      invece di restare bloccata a 520px con la colonna Aula troppo stretta. */}
+                  <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: '100%' }]}>
                     <View style={styles.tableHeaderRow}>
                       <Text style={[styles.tableHeaderCell, styles.tableColAula]}>{t('colAula', lang)}</Text>
                       <Text style={[styles.tableHeaderCell, styles.tableColUtente]}>{t('colSegnalatoDa', lang)}</Text>
@@ -5127,11 +5469,11 @@ export default function App() {
 
         {/* ------ VISTA GESTIONE PRENOTAZIONI ------ */}
         {vistaAttiva === 'gestione' && (canApprovarePrenotazioni ? (() => {
-          const prenotazioniSpecialiTutte = prenotazioni
+          const prenotazioniSpecialiTutte = prenotazioniGestibili
             .filter((p) => !!p.richiedeAutorizzazioneSpeciale)
             .sort((a, b) => b.data.localeCompare(a.data));
 
-          const attive = prenotazioni.filter((p) => p.data >= oggiStr).sort((a, b) => b.data.localeCompare(a.data));
+          const attive = prenotazioniGestibili.filter((p) => p.data >= oggiStr).sort((a, b) => b.data.localeCompare(a.data));
           const meseCorrenteStr = oggiStr.substring(0, 7);
           const mesiAttivi = Array.from(new Set([meseCorrenteStr, ...attive.map((p) => p.data.substring(0, 7))])).sort();
 
@@ -5139,7 +5481,7 @@ export default function App() {
           const [annoSel, meseSel] = selezioneAttiva.split('-').map(Number);
           const giorniNelMese = new Date(annoSel, meseSel, 0).getDate();
 
-          const prenotazioniGiornoGestione = (giornoStr) => prenotazioni.filter((p) => p.data === giornoStr);
+          const prenotazioniGiornoGestione = (giornoStr) => prenotazioniGestibili.filter((p) => p.data === giornoStr);
           const haPendenti = (giornoStr) => prenotazioniGiornoGestione(giornoStr).some((p) => p.stato === 'In attesa');
           const prenotazioniDelGiornoGestione = giornoGestioneSelezionato ? prenotazioniGiornoGestione(giornoGestioneSelezionato) : [];
 
@@ -5160,7 +5502,11 @@ export default function App() {
 
                   {prenotazioniSpecialiTutte.length > 0 && (
                     <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
-                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 520 }]}>
+                      {/* minWidth:'100%' invece di un valore fisso: su schermi larghi la tabella usa
+                          tutto lo spazio disponibile invece di restare bloccata a 520px. Su Android,
+                          numberOfLines={undefined} fa andare il testo a capo invece di troncarlo con
+                          "…" (stesso pattern già usato nella lista Utenti e in Manutenzione). */}
+                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: '100%' }]}>
                         <View style={styles.tableHeaderRow}>
                           <Text style={[styles.tableHeaderCell, styles.tableColAula]}>{t('aula', lang)}</Text>
                           <Text style={[styles.tableHeaderCell, styles.tableColUtente]}>{t('utente', lang)}</Text>
@@ -5173,9 +5519,9 @@ export default function App() {
                           const etichettaStatoPrenotazione = p.stato === 'In attesa' ? t('inAttesa', lang) : p.stato === 'Approvata' ? t('approvata', lang) : p.stato === 'Rifiutata' ? t('rifiutata', lang) : p.stato;
                           return (
                             <TouchableOpacity key={p.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]} onPress={() => setPrenotazioneDettaglio(p)}>
-                              <Text style={[styles.tableCell, styles.tableColAula]} numberOfLines={1}><Text style={{ color: colors.danger }}>★ </Text>{risolviNomeAula(p.aulaNome, lang)}{p.sezione ? ` (${risolviNomeSezione(p.sezione, lang)})` : ''}</Text>
-                              <Text style={[styles.tableCell, styles.tableColUtente]} numberOfLines={1}>{p.utenteNome}</Text>
-                              <Text style={[styles.tableCell, styles.tableColTipo]} numberOfLines={1}>{numArabo(p.fasce.join(', '), lang)}</Text>
+                              <Text style={[styles.tableCell, styles.tableColAula]} numberOfLines={Platform.OS === 'android' ? undefined : 1}><Text style={{ color: colors.danger }}>★ </Text>{risolviNomeAula(p.aulaNome, lang)}{p.sezione ? ` (${risolviNomeSezione(p.sezione, lang)})` : ''}</Text>
+                              <Text style={[styles.tableCell, styles.tableColUtente]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>{p.utenteNome}</Text>
+                              <Text style={[styles.tableCell, styles.tableColTipo]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>{numArabo(p.fasce.join(', '), lang)}</Text>
                               <View style={styles.tableColStato}>
                                 <View style={[styles.statoBadge, { backgroundColor: coloreStatoPrenotazione }]}>
                                   <Text style={styles.statoBadgeText}>{etichettaStatoPrenotazione}</Text>
@@ -5306,6 +5652,14 @@ export default function App() {
                             )}
                           </View>
 
+                          {prenotazioneDettaglio.richiedeAutorizzazioneSpeciale && (
+                            <Text style={[styles.gestioneListMeta, { marginBottom: 4 }]}>
+                              {prenotazioneDettaglio.motivoSpeciale === 'anticipoInsufficiente'
+                                ? t('motivoSpecialeAnticipoInsufficiente', lang)
+                                : t('motivoSpecialeRipetizioneOltreLimite', lang)}
+                            </Text>
+                          )}
+
                           <Text style={styles.gestioneListMeta}>{t('utente', lang)}: {prenotazioneDettaglio.utenteNome} ({prenotazioneDettaglio.utenteEmail})</Text>
                           <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('data', lang)}: {dataArabo(prenotazioneDettaglio.data, lang)} | {t('ore', lang)}: {numArabo(prenotazioneDettaglio.fasce.join(', '), lang)}</Text>
                           {prenotazioneDettaglio.motivo ? <Text style={[styles.gestioneListMeta, { marginTop: 4 }]}>{t('motivo', lang)}: {prenotazioneDettaglio.motivo}</Text> : null}
@@ -5321,7 +5675,7 @@ export default function App() {
                           )}
 
                           <View style={[styles.actionRow, { marginTop: 16 }]}>
-                            {prenotazioneDettaglio.stato === 'In attesa' && (
+                            {prenotazioneDettaglio.stato === 'In attesa' && puoApprovareQuesta(prenotazioneDettaglio) && (
                               <>
                                 <TouchableOpacity style={styles.btnApprove} onPress={() => { cambiaStatoPrenotazione(prenotazioneDettaglio.id, 'Approvata', prenotazioneDettaglio.utenteEmail, prenotazioneDettaglio.aulaNome, prenotazioneDettaglio.data, prenotazioneDettaglio.fasce); setPrenotazioneDettaglio(null); }}>
                                   <Text style={styles.btnText}>{t('approva', lang)}</Text>
@@ -5415,144 +5769,238 @@ export default function App() {
               {impostazioniVista === 'menu' && (
                 <>
                   <Text style={styles.settingsMenuSottotitolo}>{t('impostazioniMenuSottotitolo', lang)}</Text>
-                  <View style={styles.settingsMenuList}>
-                    <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('preferenze')}>
-                      <View style={styles.settingsMenuItemLeft}>
-                        <Text style={styles.settingsMenuItemIcon}>⚙️</Text>
-                        <Text style={styles.settingsMenuItemLabel}>{t('preferenze', lang)}</Text>
-                      </View>
-                      <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+
+                  {/* Accordion a gruppo singolo: un solo gruppo aperto alla volta (gruppoImpostazioniAperto),
+                      tutti chiusi all'apertura della pagina — vedi apriGruppoImpostazioni sotto. */}
+
+                  {/* Gruppo: Preferenze e notifiche (sempre visibile) */}
+                  <View style={styles.settingsMenuGroup}>
+                    <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('preferenze')}>
+                      <Text style={styles.settingsMenuGroupTitolo}>{t('settingsGruppoPreferenze', lang)}</Text>
+                      <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'preferenze' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
                     </TouchableOpacity>
+                    {gruppoImpostazioniAperto === 'preferenze' && (
+                      <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                        <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('preferenze')}>
+                          <View style={styles.settingsMenuItemLeft}>
+                            <Text style={styles.settingsMenuItemIcon}>⚙️</Text>
+                            <Text style={styles.settingsMenuItemLabel}>{t('preferenze', lang)}</Text>
+                          </View>
+                          <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                        </TouchableOpacity>
 
-                    <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('notifiche')}>
-                      <View style={styles.settingsMenuItemLeft}>
-                        <Text style={styles.settingsMenuItemIcon}>🔔</Text>
-                        <Text style={styles.settingsMenuItemLabel}>{t('sezioneNotifiche', lang)}</Text>
+                        <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('notifiche')}>
+                          <View style={styles.settingsMenuItemLeft}>
+                            <Text style={styles.settingsMenuItemIcon}>🔔</Text>
+                            <Text style={styles.settingsMenuItemLabel}>{t('sezioneNotifiche', lang)}</Text>
+                          </View>
+                          <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                        </TouchableOpacity>
                       </View>
-                      <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                    </TouchableOpacity>
-
-                    {/* MODIFICATO: guida interattiva (per tutti) + manuali
-                        amministrativi IT/AR (solo gestore/segreteria/direzione)
-                        — spostato dalla barra in alto qui, dentro Impostazioni */}
-                    <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setShowManualiChoice(true)}>
-                      <View style={styles.settingsMenuItemLeft}>
-                        <Text style={styles.settingsMenuItemIcon}>🧭</Text>
-                        <Text style={styles.settingsMenuItemLabel}>{t('manualiSceltaTitolo', lang)}</Text>
-                      </View>
-                      <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                    </TouchableOpacity>
-
-                    {canGestireUtenti && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('utenti')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>👥</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('listaAggiuntaUtenti', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canGestireDominiEmail && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('domini')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>🌐</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('permessiDomini', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canGestireClassi && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('classi')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>📚</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('classi', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canResettareDati && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('reset')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>🗑️</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('areaResetGestore', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {userRole === 'gestore' && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('avanzate')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>🔧</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('impostazioniAvanzate', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canGestireManuali && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('manuali')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>📖</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('menuManuali', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canGestireUtenti && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('blocca')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>🚫</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('areaBloccaGestore', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canGestireAule && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('aule')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>🏫</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{lang === 'ar' ? 'القاعات' : 'Aule'}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {(canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni || canGestireAulaStudio) && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('esporta')}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>📤</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('areaEsportaGestore', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canVedereRegistroAttivita && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => { setImpostazioniVista('registro'); caricaRegistroAttivita(); }}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>📋</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('registroAttivita', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {canVedereProfili && (
-                      <TouchableOpacity style={styles.settingsMenuItem} onPress={() => { setImpostazioniVista('profili'); }}>
-                        <View style={styles.settingsMenuItemLeft}>
-                          <Text style={styles.settingsMenuItemIcon}>📋</Text>
-                          <Text style={styles.settingsMenuItemLabel}>{t('profili', lang)}</Text>
-                        </View>
-                        <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
-                      </TouchableOpacity>
                     )}
                   </View>
+
+                  {/* Gruppo: Configurazione guidata (wizard) */}
+                  {(canGestireClassi || canGestireAule || canGestireAulaStudio) && (
+                    <View style={styles.settingsMenuGroup}>
+                      <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('wizard')}>
+                        <Text style={styles.settingsMenuGroupTitolo}>{t('wizardConfigVoceMenu', lang)}</Text>
+                        <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'wizard' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                      </TouchableOpacity>
+                      {gruppoImpostazioniAperto === 'wizard' && (
+                        <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                          <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('wizardConfigurazione')}>
+                            <View style={styles.settingsMenuItemLeft}>
+                              <Text style={styles.settingsMenuItemIcon}>🧭</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{t('wizardConfigVoceMenu', lang)}</Text>
+                            </View>
+                            <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Gruppo: Manuali e guide — guida interattiva (per tutti) + gestione/upload manuali
+                      amministrativi IT/AR (solo gestore/segreteria/direzione), un solo titolo per entrambi
+                      — spostato dalla barra in alto qui, dentro Impostazioni */}
+                  <View style={styles.settingsMenuGroup}>
+                    <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('manuali')}>
+                      <Text style={styles.settingsMenuGroupTitolo}>{t('manualiSceltaTitolo', lang)}</Text>
+                      <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'manuali' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                    </TouchableOpacity>
+                    {gruppoImpostazioniAperto === 'manuali' && (
+                      <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                        <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setShowManualiChoice(true)}>
+                          <View style={styles.settingsMenuItemLeft}>
+                            <Text style={styles.settingsMenuItemIcon}>🧭</Text>
+                            <Text style={styles.settingsMenuItemLabel}>{t('manualiSceltaTitolo', lang)}</Text>
+                          </View>
+                          <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                        </TouchableOpacity>
+
+                        {canGestireManuali && (
+                          <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('manuali')}>
+                            <View style={styles.settingsMenuItemLeft}>
+                              <Text style={styles.settingsMenuItemIcon}>📖</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{t('menuManuali', lang)}</Text>
+                            </View>
+                            <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Gruppo: Utenti e permessi */}
+                  {(canGestireUtenti || canGestireDominiEmail || userRole === 'gestore') && (
+                    <View style={styles.settingsMenuGroup}>
+                      <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('utenti')}>
+                        <Text style={styles.settingsMenuGroupTitolo}>{t('settingsGruppoUtenti', lang)}</Text>
+                        <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'utenti' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                      </TouchableOpacity>
+                      {gruppoImpostazioniAperto === 'utenti' && (
+                        <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                          {canGestireUtenti && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('utenti')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>👥</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('listaAggiuntaUtenti', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {canGestireDominiEmail && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('domini')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>🌐</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('permessiDomini', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {userRole === 'gestore' && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('avanzate')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>🔧</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('impostazioniAvanzate', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Gruppo: Classi e aule */}
+                  {(canGestireClassi || canGestireAule) && (
+                    <View style={styles.settingsMenuGroup}>
+                      <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('classiAule')}>
+                        <Text style={styles.settingsMenuGroupTitolo}>{t('settingsGruppoClassiAule', lang)}</Text>
+                        <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'classiAule' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                      </TouchableOpacity>
+                      {gruppoImpostazioniAperto === 'classiAule' && (
+                        <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                          {canGestireClassi && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('classi')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>📚</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('classi', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {canGestireAule && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('aule')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>🏫</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{lang === 'ar' ? 'القاعات' : 'Aule'}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Gruppo: Sicurezza e dati — blocco utenti, reset, esportazioni, registro attività */}
+                  {(canGestireUtenti || canResettareDati || canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni || canGestireAulaStudio || canVedereRegistroAttivita) && (
+                    <View style={styles.settingsMenuGroup}>
+                      <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('sicurezza')}>
+                        <Text style={styles.settingsMenuGroupTitolo}>{t('settingsGruppoSicurezza', lang)}</Text>
+                        <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'sicurezza' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                      </TouchableOpacity>
+                      {gruppoImpostazioniAperto === 'sicurezza' && (
+                        <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                          {canResettareDati && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('reset')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>🗑️</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('areaResetGestore', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {canGestireUtenti && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('blocca')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>🚫</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('areaBloccaGestore', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {(canEsportareUtentiPrenotazioni || canEsportarePrenotazioniSegnalazioni || canGestireAulaStudio) && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => setImpostazioniVista('esporta')}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>📤</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('areaEsportaGestore', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {canVedereRegistroAttivita && (
+                            <TouchableOpacity style={styles.settingsMenuItem} onPress={() => { setImpostazioniVista('registro'); caricaRegistroAttivita(); }}>
+                              <View style={styles.settingsMenuItemLeft}>
+                                <Text style={styles.settingsMenuItemIcon}>📋</Text>
+                                <Text style={styles.settingsMenuItemLabel}>{t('registroAttivita', lang)}</Text>
+                              </View>
+                              <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Gruppo: Profili */}
+                  {canVedereProfili && (
+                    <View style={styles.settingsMenuGroup}>
+                      <TouchableOpacity style={styles.settingsMenuGroupHeader} onPress={() => apriGruppoImpostazioni('profili')}>
+                        <Text style={styles.settingsMenuGroupTitolo}>{t('profili', lang)}</Text>
+                        <Text style={styles.settingsMenuGroupChevron}>{gruppoImpostazioniAperto === 'profili' ? '⌄' : (isRTL ? '‹' : '›')}</Text>
+                      </TouchableOpacity>
+                      {gruppoImpostazioniAperto === 'profili' && (
+                        <View style={[styles.settingsMenuList, styles.settingsMenuGroupContent]}>
+                          <TouchableOpacity style={styles.settingsMenuItem} onPress={() => { setImpostazioniVista('profili'); }}>
+                            <View style={styles.settingsMenuItemLeft}>
+                              <Text style={styles.settingsMenuItemIcon}>📋</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{t('profili', lang)}</Text>
+                            </View>
+                            <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  )}
                 </>
               )}
 
@@ -5580,7 +6028,7 @@ export default function App() {
                           >
                             <View style={styles.settingsMenuItemLeft}>
                               <Text style={styles.settingsMenuItemIcon}>{isAulaStudio ? '📖' : '🏫'}</Text>
-                              <Text style={styles.settingsMenuItemLabel}>{risolviNomeSezione(sez.nome, lang)}</Text>
+                              <Text style={styles.settingsMenuItemLabel}>{risolviNomeSezione(sez.nome, lang)}{sez.chiave ? ' 🔒' : ''}</Text>
                             </View>
                             <Text style={styles.settingsMenuItemChevron}>{isRTL ? '‹' : '›'}</Text>
                           </TouchableOpacity>
@@ -5594,7 +6042,7 @@ export default function App() {
                             <TouchableOpacity style={styles.smallEditBtn} onPress={() => apriModificaSezione(sez)}>
                               <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('modifica', lang)}</Text>
                             </TouchableOpacity>
-                            {!isAulaStudio && (
+                            {!isAulaStudio && !sez.chiave && (
                               <TouchableOpacity style={styles.smallDeleteBtn} onPress={() => eliminaSezione(sez.id)}>
                                 <Text style={styles.btnText}>{t('elimina', lang)}</Text>
                               </TouchableOpacity>
@@ -5616,6 +6064,9 @@ export default function App() {
                   <View style={styles.sectionTitleRow}>
                     <Text style={styles.sectionHeaderTitle}>{risolviNomeSezione(sezioneSelezionata, lang)}</Text>
                   </View>
+                  {auleClassi.some((a) => a.sezione === sezioneSelezionata) && (
+                    <Text style={[styles.infoTextSmall, { marginBottom: 10 }]}>{t('classiGestiteDaImpostazioni', lang)}</Text>
+                  )}
                   {aule.filter((a) => a.sezione === sezioneSelezionata).sort((a, b) => (a.ordine ?? 0) - (b.ordine ?? 0)).map((aula, idx, arr) => (
                     <View key={aula.id} style={styles.aulaCard}>
                       <View>
@@ -5641,10 +6092,42 @@ export default function App() {
                       </View>
                     </View>
                   ))}
+                  {auleClassi.filter((a) => a.sezione === sezioneSelezionata).map((aula) => (
+                    <View key={aula.id} style={styles.aulaCard}>
+                      <View>
+                        <Text style={styles.aulaTitle}>{risolviNomeAula(aula.nome, lang)}</Text>
+                        <Text style={styles.aulaDesc}>{t('classiVoce', lang)}</Text>
+                      </View>
+                      <TouchableOpacity style={styles.smallMoveBtn} onPress={() => apriBloccaAula(aula)}>
+                        <Text style={[styles.btnText, { color: isDarkMode ? '#F8FAFC' : '#0F172A' }]}>{t('bloccaAula', lang)}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
                   <TouchableOpacity style={[styles.addButton, { alignSelf: isRTL ? 'flex-end' : 'flex-start', marginTop: 4 }]} onPress={apriNuovaAula}>
                     <Text style={styles.addButtonText}>{t('aggiungiAula', lang)}</Text>
                   </TouchableOpacity>
                 </View>
+              )}
+
+              {/* Sottovista: Wizard di configurazione iniziale (Classi → Aule → Fasce → Ferie) */}
+              {impostazioniVista === 'wizardConfigurazione' && (canGestireClassi || canGestireAule || canGestireAulaStudio) && (
+                <ConfigWizard
+                  db={db}
+                  lang={lang as any}
+                  isRTL={isRTL}
+                  colors={colors as any}
+                  t={t}
+                  mostraAlert={mostraAlert}
+                  registraAttivita={registraAttivita}
+                  canGestireClassi={canGestireClassi}
+                  canGestireAule={canGestireAule}
+                  canGestireAulaStudio={canGestireAulaStudio}
+                  classiLista={classiLista}
+                  aule={aule}
+                  sezioniLista={sezioniLista}
+                  onRicaricaDatiGenerali={caricaDatiGenerali}
+                  onChiudi={() => setImpostazioniVista('menu')}
+                />
               )}
 
               {/* Sottovista: Impostazioni Aula Studio */}
@@ -5913,6 +6396,28 @@ export default function App() {
                         value={nuovaClasseNome}
                         onChangeText={setNuovaClasseNome}
                       />
+                      <TextInput
+                        style={[styles.input, { width: 110 }]}
+                        placeholder={t('capienza', lang)}
+                        placeholderTextColor={colors.placeholder}
+                        keyboardType="numeric"
+                        value={nuovaClasseCapienza}
+                        onChangeText={setNuovaClasseCapienza}
+                      />
+                      {nuovaClasseTipo === 'ipi' && (
+                        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                          <Text style={styles.infoTextSmall}>{t('annoClasse', lang)}</Text>
+                          {['', '1', '2', '3'].map((a) => (
+                            <TouchableOpacity
+                              key={a || 'auto'}
+                              style={[styles.editToggleBtn, { backgroundColor: nuovaClasseAnno === a ? colors.primary : colors.surfaceAlt }]}
+                              onPress={() => setNuovaClasseAnno(a)}
+                            >
+                              <Text style={[styles.editToggleBtnText, { color: nuovaClasseAnno === a ? colors.primaryText : colors.textMain }]}>{a ? numArabo(a, lang) : t('annoAuto', lang)}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
                       {classeInModifica ? (
                         <>
                           <TouchableOpacity style={styles.addButton} onPress={aggiungiClasse}>
@@ -5953,7 +6458,7 @@ export default function App() {
                       <View style={styles.classiGrid}>
                         {gruppo.elenco.map((c) => (
                           <View key={c.id} style={styles.classeCard}>
-                            <Text style={styles.classeCardNome} numberOfLines={1}>{c.nome}</Text>
+                            <Text style={styles.classeCardNome} numberOfLines={1}>{gruppo.chiave === 'medie' ? nomeClasseVisibile(c.nome) : c.nome}</Text>
                             {modalitaModificaClassi && (
                               <View style={styles.classeCardAzioni}>
                                 <TouchableOpacity style={styles.classeCardBtnModifica} onPress={() => avviaModificaClasse(c)}>
@@ -6101,6 +6606,13 @@ export default function App() {
                         </View>
                       )}
 
+                      <TouchableOpacity style={styles.checkboxRow} onPress={() => setArchivioManutenzioneIncludiNonRisolte(!archivioManutenzioneIncludiNonRisolte)}>
+                        <View style={[styles.checkboxBox, archivioManutenzioneIncludiNonRisolte && styles.checkboxBoxChecked]}>
+                          {archivioManutenzioneIncludiNonRisolte && <Text style={styles.checkboxCheckmark}>✓</Text>}
+                        </View>
+                        <Text style={styles.checkboxLabel}>{t('eliminaAncheNonRisolte', lang)}</Text>
+                      </TouchableOpacity>
+
                       <TouchableOpacity style={[styles.primaryButton, { backgroundColor: colors.danger, marginTop: 8 }]} onPress={eliminaArchivioManutenzione}>
                         <Text style={[styles.buttonText, { color: '#FFFFFF' }]}>{t('eseguiResetManutenzione', lang)}</Text>
                       </TouchableOpacity>
@@ -6233,31 +6745,36 @@ export default function App() {
                     {utentiPeriodo.length === 0 ? (
                       <Text style={{ color: colors.textMuted, fontSize: 13 }}>{t('nessunUtentePeriodo', lang)}</Text>
                     ) : Platform.OS === 'web' ? (
-                      <View style={styles.excelTable}>
-                        <View style={styles.excelRowHeader}>
-                          <Text style={[styles.excelCellHeader, { flex: 2 }]}>{t('nome', lang)}</Text>
-                          <Text style={[styles.excelCellHeader, { flex: 2 }]}>{t('email', lang)}</Text>
-                          <Text style={[styles.excelCellHeader, { flex: 2 }]}>{t('colonnaRegistrazione', lang)}</Text>
-                          <Text style={[styles.excelCellHeader, { flex: 1 }]}>{t('colonnaAzione', lang)}</Text>
-                        </View>
-                        {utentiPeriodo.map((u, idx) => (
-                          <View key={u.id} style={[styles.excelRow, idx % 2 === 0 ? styles.excelRowEven : styles.excelRowOdd]}>
-                            <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}</Text>
-                            <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{u.email}</Text>
-                            <Text style={[styles.excelCell, { flex: 2 }]} numberOfLines={1}>{formattaDataOra(u.createdAt, lang)}</Text>
-                            <View style={{ flex: 1, alignItems: 'center', padding: 10 }}>
-                              {u.email !== user.email && (
-                                <TouchableOpacity
-                                  style={[styles.excelDeleteBtn, { backgroundColor: u.bloccato ? colors.success : colors.danger, margin: 0 }]}
-                                  onPress={() => eseguiBloccoSingolo(u, !u.bloccato)}
-                                >
-                                  <Text style={styles.excelDeleteText}>{u.bloccato ? t('sbloccaSingolo', lang) : t('bloccaSingolo', lang)}</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
+                      // Avvolta in uno scroll orizzontale (come le altre tabelle) invece di un View
+                      // fisso: prima, se nome/email non entravano nella larghezza disponibile, il
+                      // testo troncava con "…" senza nessun modo per recuperarlo.
+                      <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
+                        <View style={[styles.excelTable, { minWidth: '100%' }]}>
+                          <View style={styles.excelRowHeader}>
+                            <Text style={[styles.excelCellHeader, { flex: 2, minWidth: 140 }]}>{t('nome', lang)}</Text>
+                            <Text style={[styles.excelCellHeader, { flex: 2, minWidth: 180 }]}>{t('email', lang)}</Text>
+                            <Text style={[styles.excelCellHeader, { flex: 2, minWidth: 140 }]}>{t('colonnaRegistrazione', lang)}</Text>
+                            <Text style={[styles.excelCellHeader, { flex: 1, minWidth: 110 }]}>{t('colonnaAzione', lang)}</Text>
                           </View>
-                        ))}
-                      </View>
+                          {utentiPeriodo.map((u, idx) => (
+                            <View key={u.id} style={[styles.excelRow, idx % 2 === 0 ? styles.excelRowEven : styles.excelRowOdd]}>
+                              <Text style={[styles.excelCell, { flex: 2, minWidth: 140 }]} numberOfLines={1}>{u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}</Text>
+                              <Text style={[styles.excelCell, { flex: 2, minWidth: 180 }]} numberOfLines={1}>{u.email}</Text>
+                              <Text style={[styles.excelCell, { flex: 2, minWidth: 140 }]} numberOfLines={1}>{formattaDataOra(u.createdAt, lang)}</Text>
+                              <View style={{ flex: 1, minWidth: 110, alignItems: 'center', padding: 10 }}>
+                                {u.email !== user.email && (
+                                  <TouchableOpacity
+                                    style={[styles.excelDeleteBtn, { backgroundColor: u.bloccato ? colors.success : colors.danger, margin: 0 }]}
+                                    onPress={() => eseguiBloccoSingolo(u, !u.bloccato)}
+                                  >
+                                    <Text style={styles.excelDeleteText}>{u.bloccato ? t('sbloccaSingolo', lang) : t('bloccaSingolo', lang)}</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </ScrollView>
                     ) : (
                       // ---- Versione Android: righe orizzontali compatte (Nome + Email), con "Apri" per i dettagli ----
                       <View>
@@ -6277,7 +6794,8 @@ export default function App() {
                                     <Text style={[styles.compactUserName, isRTL && { textAlign: 'right' }]} numberOfLines={1}>
                                       {u.nome}{u.bloccato ? ` (${t('utenteBloccatoBadge', lang)})` : ''}
                                     </Text>
-                                    <Text style={[styles.compactUserEmail, isRTL && { textAlign: 'right' }]} numberOfLines={1}>{u.email}</Text>
+                                    {/* Senza limite di righe: un'email lunga va a capo invece di troncare con "…". */}
+                                    <Text style={[styles.compactUserEmail, isRTL && { textAlign: 'right' }]}>{u.email}</Text>
                                   </View>
                                   <Text style={styles.compactUserExpandIcon}>{espansa ? '▲' : '▼'}</Text>
                                 </TouchableOpacity>
@@ -6609,8 +7127,11 @@ export default function App() {
                     {datiFiltrati.length === 0 ? (
                       <Text style={styles.infoText}>{t('nessunaAttivita', lang)}</Text>
                     ) : (
+                      /* minWidth:'100%' su entrambe le piattaforme (non più 380 fisso su web/iOS): la
+                         tabella usa tutto lo spazio disponibile. Su Android il testo va a capo invece
+                         di troncare con "…" (stesso pattern della lista Utenti e di Manutenzione). */
                       <ScrollView horizontal={Platform.OS !== 'android'} showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
-                        <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: Platform.OS === 'android' ? '100%' : 380 }]}>
+                        <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: '100%' }]}>
                           <View style={styles.tableHeaderRow}>
                             {Platform.OS !== 'android' && (
                               <Text style={[styles.tableHeaderCell, { flex: 1.3, minWidth: 110 }]}>{t('nome', lang)}</Text>
@@ -6625,10 +7146,10 @@ export default function App() {
                               {Platform.OS !== 'android' && (
                                 <Text style={[styles.tableCell, { flex: 1.3, minWidth: 110 }]} numberOfLines={1}>{r.userName || '-'}</Text>
                               )}
-                              <Text style={[styles.tableCell, { flex: Platform.OS === 'android' ? 1 : 1.6, minWidth: Platform.OS === 'android' ? 90 : 150 }]} numberOfLines={1}>
+                              <Text style={[styles.tableCell, { flex: Platform.OS === 'android' ? 1 : 1.6, minWidth: Platform.OS === 'android' ? 90 : 150 }]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>
                                 {Platform.OS === 'android' ? (r.userName || r.userEmail) : (r.userEmail || '-')}
                               </Text>
-                              <Text style={[styles.tableCell, { flex: 1.3, minWidth: 100 }]} numberOfLines={1}>{tipiEtichette[r.tipo] || r.tipo}</Text>
+                              <Text style={[styles.tableCell, { flex: 1.3, minWidth: 100 }]} numberOfLines={Platform.OS === 'android' ? undefined : 1}>{tipiEtichette[r.tipo] || r.tipo}</Text>
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -6707,22 +7228,24 @@ export default function App() {
                   {utentiLista.filter(u => u.id !== user.uid).length === 0 ? (
                     <Text style={styles.infoText}>{t('nessunAltroUtente', lang)}</Text>
                   ) : Platform.OS === 'web' ? (
+                    /* Colonne a flex+minWidth (non più width fissa in px): la tabella cresce con lo
+                       spazio disponibile invece di lasciare margine vuoto su schermi larghi. */
                     <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
-                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: 760, width: '100%' }]}>
+                      <View style={[styles.tableCard, styles.tableCardScrollable, { minWidth: '100%' }]}>
                         <View style={styles.tableHeaderRow}>
-                          <Text style={[styles.tableHeaderCell, { width: 160 }]}>{t('nome', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, { width: 290 }]}>{t('email', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { width: 170 }]}>{t('ruolo', lang)}</Text>
-                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { width: 100 }]}>{t('azioni', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, { flex: 1.6, minWidth: 160 }]}>{t('nome', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, { flex: 2.9, minWidth: 290 }]}>{t('email', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1.7, minWidth: 170 }]}>{t('ruolo', lang)}</Text>
+                          <Text style={[styles.tableHeaderCell, styles.permTableHeaderCellCenter, { flex: 1, minWidth: 100 }]}>{t('azioni', lang)}</Text>
                         </View>
                         {utentiLista.filter(u => u.id !== user.uid).map((u, idx) => {
                           const hasOverrides = u.permessiSovrascritti && Object.keys(u.permessiSovrascritti).length > 0;
                           return (
                             <View key={u.id} style={[styles.tableRow, idx % 2 === 1 && styles.tableRowAlt]}>
-                              <Text style={[styles.tableCell, { width: 160 }]} numberOfLines={2}>{u.nome}</Text>
-                              <Text style={[styles.tableCell, { width: 290 }]} numberOfLines={1}>{u.email}</Text>
-                              <Text style={[styles.tableCell, { textAlign: 'center' }, { width: 170 }]} numberOfLines={1}>{etichettaRuolo(u.role, lang)}</Text>
-                              <View style={{ width: 100, alignItems: 'center' }}>
+                              <Text style={[styles.tableCell, { flex: 1.6, minWidth: 160 }]} numberOfLines={2}>{u.nome}</Text>
+                              <Text style={[styles.tableCell, { flex: 2.9, minWidth: 290 }]} numberOfLines={1}>{u.email}</Text>
+                              <Text style={[styles.tableCell, { textAlign: 'center' }, { flex: 1.7, minWidth: 170 }]} numberOfLines={1}>{etichettaRuolo(u.role, lang)}</Text>
+                              <View style={{ flex: 1, minWidth: 100, alignItems: 'center' }}>
                                 <TouchableOpacity
                                   style={[styles.smallEditBtn, { backgroundColor: hasOverrides ? colors.success : colors.primary }]}
                                   onPress={() => {
@@ -6777,7 +7300,8 @@ export default function App() {
                                 onPress={() => setRigheEspansePermessiAvanzati(prev => ({ ...prev, [u.id]: !prev[u.id] }))}
                               >
                                 <View style={{ flex: 1 }}>
-                                  <Text style={[styles.compactUserName, isRTL && { textAlign: 'right' }]} numberOfLines={1}>{u.nome}</Text>
+                                  {/* Senza limite di righe: un nome lungo va a capo invece di troncare con "…". */}
+                                  <Text style={[styles.compactUserName, isRTL && { textAlign: 'right' }]}>{u.nome}</Text>
                                   <Text style={[styles.compactUserEmail, isRTL && { textAlign: 'right' }]} numberOfLines={1}>{etichettaRuolo(u.role, lang)}</Text>
                                 </View>
                                 <Text style={styles.compactUserExpandIcon}>{espansa ? '▲' : '▼'}</Text>
@@ -6859,7 +7383,7 @@ export default function App() {
                             <TouchableOpacity style={[styles.dropdownOption, filtriProfili.ruolo === 'tutti' && styles.dropdownOptionActive]} onPress={() => { setFiltriProfili(prev => ({ ...prev, ruolo: 'tutti' })); setFiltroRuoloProfiliDropdownAperto(false); }}>
                               <Text style={[styles.dropdownOptionText, filtriProfili.ruolo === 'tutti' && styles.dropdownOptionTextActive]}>{t('tutte', lang)}</Text>
                             </TouchableOpacity>
-                            {['utente','studente','insegnante','gestore','economo','segreteria','presideIpi','vicePresideIpi','presideAbm','oratorio','manutentore'].map(r => {
+                            {['utente','studente','insegnante','gestore','economo','segreteria','presideIpi','vicePresideIpi','presideAbm','oratorio','TEVT','segreteriaTevt','manutentore'].map(r => {
                               const attivo = filtriProfili.ruolo === r;
                               return (
                                 <TouchableOpacity key={r} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setFiltriProfili(prev => ({ ...prev, ruolo: r })); setFiltroRuoloProfiliDropdownAperto(false); }}>
@@ -6881,8 +7405,10 @@ export default function App() {
                       <Text style={styles.infoText}>{t('nessunProfilo', lang)}</Text>
                     ) : Platform.OS === 'web' ? (
                       /* --- WEB: tabella allargata, colonne ben distanziate --- */
-                      <ScrollView horizontal>
-                        <View style={styles.tableCard}>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
+                        {/* minWidth:'100%': su schermi larghi la tabella riempie lo spazio disponibile
+                            invece di restare bloccata alla larghezza minima delle colonne. */}
+                        <View style={[styles.tableCard, { minWidth: '100%' }]}>
                           <View style={styles.tableHeaderRow}>
                             <Text style={[styles.tableHeaderCell, { minWidth: 200, flex: 1.6 }]}>{t('nome', lang)}</Text>
                             <Text style={[styles.tableHeaderCell, { minWidth: 260, flex: 2 }]}>{t('email', lang)}</Text>
@@ -7142,7 +7668,7 @@ export default function App() {
               <Text style={styles.label}>{t('insegnanteRiferimento', lang)}</Text>
               <TextInput style={styles.input} placeholder={t('insegnanteRiferimentoPlaceholder', lang)} placeholderTextColor={colors.placeholder} value={insegnanteRiferimento} onChangeText={setInsegnanteRiferimento} />
 
-              {sezioneSelezionata === 'Scuola Professionale' && (
+              {isSezioneProfessionale && (
                 <>
                   <Text style={styles.label}>{t('domandaStudenteIPI', lang)}</Text>
                   <TouchableOpacity style={styles.checkboxRow} onPress={() => setStudenteIPI('si')}>
@@ -7709,7 +8235,7 @@ export default function App() {
                       const attivo = profiloModificaDati.classe === cls;
                       return (
                         <TouchableOpacity key={cls} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setProfiloModificaDati(prev => ({ ...prev, classe: cls })); setModalScegliClasseProfilo(false); }}>
-                          <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{cls}</Text>
+                          <Text style={[styles.dropdownOptionText, attivo && styles.dropdownOptionTextActive]}>{nomeClasseVisibile(cls)}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -8236,6 +8762,41 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
     fontSize: 13,
     marginBottom: 16,
   },
+  settingsMenuGroup: {
+    marginBottom: 10,
+    maxWidth: 720,
+    width: '100%',
+    alignSelf: isRTL ? 'flex-end' : 'flex-start',
+  },
+  settingsMenuGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    minHeight: 52,
+    ...softShadow(colors, 0.05, 6, 2),
+  },
+  settingsMenuGroupTitolo: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    textAlign: isRTL ? 'right' : 'left',
+  },
+  settingsMenuGroupChevron: {
+    color: colors.primary,
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  settingsMenuGroupContent: {
+    marginTop: 10,
+  },
   settingsMenuList: Platform.OS === 'web'
     ? { flexDirection: 'row', flexWrap: 'wrap', gap: 12, rowGap: 12, maxWidth: 820, width: '100%', alignSelf: isRTL ? 'flex-end' : 'flex-start' }
     : { gap: 10, maxWidth: 720, width: '100%', alignSelf: isRTL ? 'flex-end' : 'flex-start' },
@@ -8395,7 +8956,10 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
   tableColAula: { flex: 1.3, minWidth: 130 },
   tableColUtente: { flex: 1.1, minWidth: 100 },
   tableColTipo: { flex: 0.9, minWidth: 90 },
-  tableColStato: { flex: 1, minWidth: 80 },
+  // paddingHorizontal aggiunto: il badge di stato usa alignSelf per attaccarsi a un lato
+  // della colonna (destra in RTL, sinistra in LTR) — senza padding qui finiva incollato
+  // al bordo esterno della tabella proprio sul lato dove si allinea.
+  tableColStato: { flex: 1, minWidth: 80, paddingHorizontal: 8 },
   tableColData: { flex: 0.9, minWidth: 80 },
 
   // ---- Badge stato ----
@@ -8670,7 +9234,10 @@ const getDynamicStyles = (colors: any, isRTL: any) => StyleSheet.create({
     fontSize: Platform.OS === 'web' ? 18 : 18,
     fontWeight: '700',
     flex: 1,
-    paddingRight: 8,
+    // Spazio verso il pulsante di chiusura "✕": in RTL il mirroring nativo lo sposta
+    // a sinistra del titolo, quindi il padding va sul lato opposto rispetto a LTR.
+    paddingRight: isRTL ? 0 : 8,
+    paddingLeft: isRTL ? 8 : 0,
   },
   closeText: {
     color: colors.textMain,

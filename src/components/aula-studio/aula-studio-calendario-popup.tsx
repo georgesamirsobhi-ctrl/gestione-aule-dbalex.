@@ -26,7 +26,8 @@ interface CalendarioPopupProps {
 
 export default function AulaStudioCalendarioPopup(props: CalendarioPopupProps) {
   const { visible, onClose, dataSelezionata, onSeleziona, giorniAttivi, colors, lang, titolo } = props;
-  const styles = getStyles(colors);
+  const isRTL = lang === 'ar';
+  const styles = getStyles(colors, isRTL);
 
   const [meseVisualizzato, setMeseVisualizzato] = useState<string>((dataSelezionata || oggiIso()).substring(0, 7));
 
@@ -89,7 +90,7 @@ export default function AulaStudioCalendarioPopup(props: CalendarioPopupProps) {
   );
 }
 
-const getStyles = (colors: Record<string, string>) =>
+const getStyles = (colors: Record<string, string>, isRTL: boolean) =>
   StyleSheet.create({
     overlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: 20 },
     box: {
@@ -103,7 +104,9 @@ const getStyles = (colors: Record<string, string>) =>
       alignSelf: 'center',
     },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-    titolo: { color: colors.textMain, fontSize: 15, fontWeight: '700', flex: 1, paddingRight: 8 },
+    // Spazio verso il pulsante "✕": in RTL il mirroring nativo lo sposta a sinistra del
+    // titolo, quindi il padding va sul lato opposto rispetto a LTR.
+    titolo: { color: colors.textMain, fontSize: 15, fontWeight: '700', flex: 1, paddingRight: isRTL ? 0 : 8, paddingLeft: isRTL ? 8 : 0 },
     chiudi: { color: colors.textMain, fontSize: 18 },
     navMese: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
     freccia: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },

@@ -7,19 +7,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-import AulaStudioCalendarioPopup from './aula-studio-calendario-popup';
-import { numArabo, dataArabo } from '../../utils/numeri-arabo';
-import { TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
+import AulaStudioFasceEditor from './aula-studio-fasce-editor';
+import AulaStudioFerieEditor from './aula-studio-ferie-editor';
+import { numArabo } from '../../utils/numeri-arabo';
+import { aulaStudioTipoScuolaConsentito, TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
 import {
   aggiungiAulaStudioAula,
   eliminaAulaStudioAula,
   modificaAulaStudioAula,
   salvaAulaStudioConfig,
+  salvaAulaStudioPrenotazioniAttive,
   spostaAulaStudioAula,
   useAulaStudioAule,
   useAulaStudioConfig,
+  useAulaStudioPrenotazioniAttive,
 } from './aula-studio-data';
-import { AULA_STUDIO_CONFIG_DEFAULT, AulaStudioConfig, FasciaOraria, IntervalloFerie, NOMI_MESI_BREVI, nomeAulaStudio } from './aula-studio-utils';
+import { AULA_STUDIO_CONFIG_DEFAULT, AulaStudioConfig, NOMI_MESI_BREVI, nomeAulaStudio } from './aula-studio-utils';
 import { AulaStudioAula, AulaStudioSharedProps } from './aula-studio-types';
 
 const GIORNI_MESE = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
@@ -99,16 +102,36 @@ const getStylesTendina = (colors: Record<string, string>) =>
   });
 
 export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
-  const { db, lang, isRTL, colors, t, mostraAlert, registraAttivita } = props;
+  const { db, userRole, lang, isRTL, colors, t, mostraAlert, registraAttivita } = props;
   const styles = useMemo(() => getStyles(colors), [colors]);
   const nomiMesi = NOMI_MESI_BREVI[lang] || NOMI_MESI_BREVI.it;
 
   const { configPerAula } = useAulaStudioConfig(db);
   const { aule } = useAulaStudioAule(db);
+
+  // ---- Interruttori prenotazioni attive/sospese per tipo scuola (Medie/IPI) ----
+  // null = nessuna restrizione di ambito (es. Gestore): mostra entrambi gli interruttori.
+  const ambitoRuolo = aulaStudioTipoScuolaConsentito(userRole);
+  const { prenotazioniAttive } = useAulaStudioPrenotazioniAttive(db);
+  const [cambiandoPrenotazioni, setCambiandoPrenotazioni] = useState<'medie' | 'ipi' | null>(null);
+
+  const cambiaPrenotazioniAttive = async (tipoScuola: 'medie' | 'ipi', nuovoValore: boolean) => {
+    setCambiandoPrenotazioni(tipoScuola);
+    try {
+      await salvaAulaStudioPrenotazioniAttive(db, tipoScuola, nuovoValore);
+      await registraAttivita(
+        TIPI_REGISTRO_AULA_STUDIO.PRENOTAZIONI_ATTIVE,
+        `Prenotazioni ${tipoScuola === 'medie' ? 'Medie' : 'IPI'} ${nuovoValore ? 'riattivate' : 'sospese'}`
+      );
+    } catch (e: any) {
+      mostraAlert(t('errore', lang), e?.message || t('aulaStudioErroreGenerico', lang));
+    } finally {
+      setCambiandoPrenotazioni(null);
+    }
+  };
   const [aulaId, setAulaId] = useState<string>('');
   const [bozza, setBozza] = useState<AulaStudioConfig>(configPerAula[aulaId] || AULA_STUDIO_CONFIG_DEFAULT);
   const [salvando, setSalvando] = useState(false);
-  const [popupFerieIndice, setPopupFerieIndice] = useState<{ indice: number; campo: 'inizio' | 'fine' } | null>(null);
 
   // Sceglie automaticamente la prima aula disponibile appena l'elenco (dinamico) è pronto.
   useEffect(() => {
@@ -184,35 +207,6 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
     }
   };
 
-  const aggiornaFascia = (indice: number, campo: keyof FasciaOraria, valore: string) => {
-    setBozza((prev) => ({
-      ...prev,
-      fasce: prev.fasce.map((f, i) => (i === indice ? { ...f, [campo]: valore } : f)),
-    }));
-  };
-  const aggiungiFascia = () => {
-    setBozza((prev) => ({ ...prev, fasce: [...prev.fasce, { inizio: '18:00', fine: '19:00' }] }));
-  };
-  const rimuoviFascia = (indice: number) => {
-    setBozza((prev) => ({ ...prev, fasce: prev.fasce.filter((_, i) => i !== indice) }));
-  };
-
-  const aggiornaFerie = (indice: number, campo: keyof IntervalloFerie, valore: string) => {
-    setBozza((prev) => ({
-      ...prev,
-      ferieExtra: prev.ferieExtra.map((f, i) => (i === indice ? { ...f, [campo]: valore } : f)),
-    }));
-  };
-  const aggiungiFerie = () => {
-    setBozza((prev) => ({
-      ...prev,
-      ferieExtra: [...prev.ferieExtra, { inizio: '', fine: '', etichetta: '' }],
-    }));
-  };
-  const rimuoviFerie = (indice: number) => {
-    setBozza((prev) => ({ ...prev, ferieExtra: prev.ferieExtra.filter((_, i) => i !== indice) }));
-  };
-
   const aggiornaSemestreMese = (campo: 'semestre1Inizio' | 'semestre2Inizio', mese: string) => {
     setBozza((prev) => {
       const giornoAttuale = (prev[campo] || '01-01').split('-')[1] || '01';
@@ -258,6 +252,38 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       <View style={styles.formWrap}>
         <Text style={styles.titolo}>{t('aulaStudioImpostazioniTitolo', lang)}</Text>
+
+        <Text style={styles.sezioneTitolo}>{t('aulaStudioImpostazioniPrenotazioniSezione', lang)}</Text>
+        <View style={{ marginBottom: 8 }}>
+          {(ambitoRuolo === null || ambitoRuolo === 'medie') && (
+            <View style={styles.rigaInterruttore}>
+              <Text style={styles.rigaInterruttoreLabel}>{t('aulaStudioImpostazioniPrenotazioniMedie', lang)}</Text>
+              <TouchableOpacity
+                style={[styles.interruttoreBtn, { backgroundColor: prenotazioniAttive.medie ? colors.success : colors.danger }]}
+                onPress={() => cambiaPrenotazioniAttive('medie', !prenotazioniAttive.medie)}
+                disabled={cambiandoPrenotazioni === 'medie'}
+              >
+                <Text style={styles.interruttoreBtnText}>
+                  {prenotazioniAttive.medie ? t('aulaStudioPrenotazioniAttivo', lang) : t('aulaStudioPrenotazioniSospeso', lang)}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {(ambitoRuolo === null || ambitoRuolo === 'ipi') && (
+            <View style={styles.rigaInterruttore}>
+              <Text style={styles.rigaInterruttoreLabel}>{t('aulaStudioImpostazioniPrenotazioniIpi', lang)}</Text>
+              <TouchableOpacity
+                style={[styles.interruttoreBtn, { backgroundColor: prenotazioniAttive.ipi ? colors.success : colors.danger }]}
+                onPress={() => cambiaPrenotazioniAttive('ipi', !prenotazioniAttive.ipi)}
+                disabled={cambiandoPrenotazioni === 'ipi'}
+              >
+                <Text style={styles.interruttoreBtnText}>
+                  {prenotazioniAttive.ipi ? t('aulaStudioPrenotazioniAttivo', lang) : t('aulaStudioPrenotazioniSospeso', lang)}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
 
         <View style={styles.rigaGestioneAuleHeader}>
           <Text style={styles.sezioneTitolo}>{lang === 'ar' ? 'القاعات' : 'Aule'}</Text>
@@ -359,40 +385,22 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
         />
 
         <Text style={styles.sezioneTitolo}>{t('aulaStudioFasceOrarie', lang)}</Text>
-        {bozza.fasce.map((f, i) => (
-          <View key={i} style={styles.rigaFasciaEdit}>
-            <TextInput style={[styles.input, { flex: 1 }]} placeholder="HH:MM" value={f.inizio} onChangeText={(v) => aggiornaFascia(i, 'inizio', v)} />
-            <Text style={styles.trattino}>—</Text>
-            <TextInput style={[styles.input, { flex: 1 }]} placeholder="HH:MM" value={f.fine} onChangeText={(v) => aggiornaFascia(i, 'fine', v)} />
-            <TouchableOpacity style={styles.bottoneRimuovi} onPress={() => rimuoviFascia(i)}>
-              <Text style={styles.bottoneRimuoviText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-        <TouchableOpacity style={styles.bottoneAggiungiRiga} onPress={aggiungiFascia}>
-          <Text style={styles.bottoneAggiungiRigaText}>{t('aulaStudioAggiungiFascia', lang)}</Text>
-        </TouchableOpacity>
+        <AulaStudioFasceEditor
+          fasce={bozza.fasce}
+          onChange={(fasce) => setBozza((prev) => ({ ...prev, fasce }))}
+          colors={colors}
+          t={t}
+          lang={lang}
+        />
 
         <Text style={styles.sezioneTitolo}>{t('aulaStudioFerieExtra', lang)}</Text>
-        {bozza.ferieExtra.map((f, i) => (
-          <View key={i} style={styles.rigaFerieEdit}>
-            <TouchableOpacity style={[styles.input, styles.casellaData, { flex: 1 }]} onPress={() => setPopupFerieIndice({ indice: i, campo: 'inizio' })}>
-              <Text style={[styles.testoCasellaData, !f.inizio && { color: colors.placeholder }]}>{f.inizio ? dataArabo(f.inizio, lang) : (lang === 'ar' ? 'سنة-شهر-يوم' : 'AAAA-MM-GG')}</Text>
-              <Text style={styles.casellaSceltaIcona}>📅</Text>
-            </TouchableOpacity>
-            <Text style={styles.trattino}>—</Text>
-            <TouchableOpacity style={[styles.input, styles.casellaData, { flex: 1 }]} onPress={() => setPopupFerieIndice({ indice: i, campo: 'fine' })}>
-              <Text style={[styles.testoCasellaData, !f.fine && { color: colors.placeholder }]}>{f.fine ? dataArabo(f.fine, lang) : (lang === 'ar' ? 'سنة-شهر-يوم' : 'AAAA-MM-GG')}</Text>
-              <Text style={styles.casellaSceltaIcona}>📅</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.bottoneRimuovi} onPress={() => rimuoviFerie(i)}>
-              <Text style={styles.bottoneRimuoviText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-        <TouchableOpacity style={styles.bottoneAggiungiRiga} onPress={aggiungiFerie}>
-          <Text style={styles.bottoneAggiungiRigaText}>{t('aulaStudioAggiungiFerie', lang)}</Text>
-        </TouchableOpacity>
+        <AulaStudioFerieEditor
+          ferieExtra={bozza.ferieExtra}
+          onChange={(ferieExtra) => setBozza((prev) => ({ ...prev, ferieExtra }))}
+          colors={colors}
+          t={t}
+          lang={lang}
+        />
 
         <Text style={styles.sezioneTitolo}>{t('aulaStudioSemestri', lang)}</Text>
         <Text style={styles.testoInfo}>{t('aulaStudioSemestriSpiegazione', lang)}</Text>
@@ -451,18 +459,6 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
           <Text style={styles.bottonePrimarioText}>{t('salva', lang) || 'Salva'}</Text>
         </TouchableOpacity>
       </View>
-
-      <AulaStudioCalendarioPopup
-        visible={!!popupFerieIndice}
-        onClose={() => setPopupFerieIndice(null)}
-        dataSelezionata={popupFerieIndice ? bozza.ferieExtra[popupFerieIndice.indice]?.[popupFerieIndice.campo] || null : null}
-        onSeleziona={(d) => {
-          if (popupFerieIndice) aggiornaFerie(popupFerieIndice.indice, popupFerieIndice.campo, d);
-        }}
-        colors={colors}
-        lang={lang}
-        titolo={t('aulaStudioFerieExtra', lang)}
-      />
     </ScrollView>
   );
 }
@@ -481,18 +477,17 @@ const getStyles = (colors: Record<string, string>) =>
     etichettaPiccola: { color: colors.textMuted, fontSize: 12, marginBottom: 4 },
     testoInfo: { color: colors.textMuted, fontSize: 12, marginBottom: 8 },
     input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: colors.textMain, backgroundColor: colors.surface },
-    casellaData: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    testoCasellaData: { color: colors.textMain, fontSize: 13 },
-    casellaSceltaIcona: { color: colors.textMuted, fontSize: 13, marginLeft: 6 },
     rigaFasciaEdit: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-    rigaFerieEdit: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-    trattino: { color: colors.textMuted, marginHorizontal: 6 },
     bottoneRimuovi: { marginLeft: 8, width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
     bottoneRimuoviText: { color: colors.danger, fontWeight: '700' },
     bottoneAggiungiRiga: { alignSelf: 'flex-start', marginBottom: 8 },
     bottoneAggiungiRigaText: { color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' },
     bottonePrimario: { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 24, marginBottom: 40 },
     bottonePrimarioText: { color: colors.primaryText, fontWeight: '700', fontSize: 15 },
+    rigaInterruttore: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+    rigaInterruttoreLabel: { color: colors.textMain, fontWeight: '600', fontSize: 14 },
+    interruttoreBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20 },
+    interruttoreBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
     rigaGestioneAuleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
     editToggleBtn: { paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8 },
     editToggleBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },

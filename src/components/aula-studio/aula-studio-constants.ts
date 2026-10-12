@@ -24,6 +24,16 @@ export const AULA_STUDIO_MEDIE_ID = 'aula-studio-medie';
 export const AULA_STUDIO_IPI_ID = 'aula-studio-ipi';
 
 /**
+ * Id del documento "generale" nella collection aulaStudioConfig, separato dai
+ * documenti di config per singola aula (che usano come id l'id dell'aula):
+ * contiene solo gli interruttori prenotazioni attive/sospese per tipo scuola
+ * (prenotazioniAttiveMedie/prenotazioniAttiveIpi). Non collide con gli id
+ * delle aule, che sono id Firestore auto-generati (tranne le 2 di semina,
+ * comunque diversi da questa stringa).
+ */
+export const AULA_STUDIO_CONFIG_GENERALE_ID = 'generale';
+
+/**
  * Dati di semina (usati una sola volta, alla prima apertura del modulo, per creare
  * i documenti iniziali nella collection aulaStudioAule se è vuota). Da lì in poi le
  * aule sono gestite dal gestore (aggiunta, riordino, rinomina IT/AR) tramite
@@ -87,6 +97,7 @@ export const TIPI_REGISTRO_AULA_STUDIO = {
   PALLINO_ROSSO: 'aula_studio_pallino_rosso',
   AZIONE_TERZO_PALLINO: 'aula_studio_azione_terzo_pallino',
   MODIFICA_CONFIG: 'aula_studio_modifica_config',
+  PRENOTAZIONI_ATTIVE: 'aula_studio_prenotazioni_attive',
   RIMOZIONE_PALLINO: 'aula_studio_rimozione_pallino',
   RICHIESTA_TURNO: 'aula_studio_richiesta_turno',
   CONFERMA_TURNO: 'aula_studio_conferma_turno',

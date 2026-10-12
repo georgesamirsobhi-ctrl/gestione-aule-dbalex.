@@ -723,7 +723,10 @@ export default function AulaStudioResponsabileView(props: AulaStudioSharedProps 
         {righeTabella.length === 0 ? (
           <Text style={styles.testoInfo}>{t('aulaStudioNessunaPrenotazione', lang)}</Text>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={Platform.OS === 'web'} style={styles.tableScrollWrap}>
+          // Indicatore di scroll sempre visibile (non solo su web): su Android la tabella a 8
+          // colonne scorre in orizzontale ma non c'era alcun segnale visivo che lo rendesse
+          // scopribile — stessa disattenzione già corretta nei tab del wizard di configurazione.
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollWrap}>
             <View style={[styles.tableCard, { minWidth: 960, width: '100%' }]}>
               <View style={styles.tableHeaderRow}>
                 <Text style={[styles.tableHeaderCell, { width: 150 }]}>{t('aulaStudioColNome', lang)}</Text>
@@ -1381,7 +1384,9 @@ const getStyles = (colors: Record<string, string>, isRTL: boolean) =>
       paddingVertical: 10,
       paddingHorizontal: 12,
     },
-    dropdownTriggerText: { color: colors.textMain, fontSize: 14, fontWeight: '700', flex: 1, paddingRight: 8 },
+    // Spazio verso l'icona "▼": in RTL il mirroring nativo la sposta a sinistra del
+    // testo, quindi il padding va sul lato opposto rispetto a LTR.
+    dropdownTriggerText: { color: colors.textMain, fontSize: 14, fontWeight: '700', flex: 1, paddingRight: isRTL ? 0 : 8, paddingLeft: isRTL ? 8 : 0 },
     dropdownRicercaBox: {
       backgroundColor: colors.bg,
       borderRadius: 16,

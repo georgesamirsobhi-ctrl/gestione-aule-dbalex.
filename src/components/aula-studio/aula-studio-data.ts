@@ -21,8 +21,14 @@ import {
 import type { AulaStudioAula, ProfiloAulaStudioStudente, RichiestaTurno } from './aula-studio-types';
 import { useEffect, useState } from 'react';
 
-import { AULA_STUDIO_CONFIG_DEFAULT, AulaStudioConfig, calcolaSemestreCorrente } from './aula-studio-utils';
-import { AULE_STUDIO_SEED, COLLEZIONI_AULA_STUDIO } from './aula-studio-constants';
+import {
+  AULA_STUDIO_CONFIG_DEFAULT,
+  AULA_STUDIO_PRENOTAZIONI_ATTIVE_DEFAULT,
+  AulaStudioConfig,
+  AulaStudioPrenotazioniAttive,
+  calcolaSemestreCorrente,
+} from './aula-studio-utils';
+import { AULA_STUDIO_CONFIG_GENERALE_ID, AULE_STUDIO_SEED, COLLEZIONI_AULA_STUDIO } from './aula-studio-constants';
 import { AulaStudioConfigPerAula, BloccoAulaStudio, PrenotazioneAulaStudio, SanzioneAulaStudio } from './aula-studio-types';
 
 // ---------------------------------------------------------------------------
@@ -166,6 +172,55 @@ export async function salvaAulaStudioConfig(
     }
     throw err;
   });
+}
+
+/**
+ * Ascolta in tempo reale lo stato attivo/sospeso delle prenotazioni Aula
+ * Studio, separato per tipo scuola (documento "generale" in aulaStudioConfig,
+ * distinto dai documenti di config per singola aula). Documento o campo
+ * mancante → prenotazioni attive di default (nessuna migrazione richiesta).
+ */
+export function useAulaStudioPrenotazioniAttive(db: Firestore): {
+  prenotazioniAttive: AulaStudioPrenotazioniAttive;
+  caricamentoPrenotazioniAttive: boolean;
+} {
+  const [prenotazioniAttive, setPrenotazioniAttive] = useState<AulaStudioPrenotazioniAttive>(
+    AULA_STUDIO_PRENOTAZIONI_ATTIVE_DEFAULT
+  );
+  const [caricamentoPrenotazioniAttive, setCaricamentoPrenotazioniAttive] = useState(true);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, COLLEZIONI_AULA_STUDIO.CONFIG, AULA_STUDIO_CONFIG_GENERALE_ID),
+      (snap) => {
+        const dati = snap.data() as Partial<{ prenotazioniAttiveMedie: boolean; prenotazioniAttiveIpi: boolean }> | undefined;
+        setPrenotazioniAttive({
+          medie: dati?.prenotazioniAttiveMedie ?? true,
+          ipi: dati?.prenotazioniAttiveIpi ?? true,
+        });
+        setCaricamentoPrenotazioniAttive(false);
+      },
+      () => setCaricamentoPrenotazioniAttive(false)
+    );
+    return () => unsub();
+  }, [db]);
+
+  return { prenotazioniAttive, caricamentoPrenotazioniAttive };
+}
+
+/**
+ * Attiva o sospende le prenotazioni Aula Studio per un tipo scuola (Medie o
+ * IPI). Scrive solo sul documento "generale" di aulaStudioConfig: non tocca
+ * la config delle singole aule né alcuna prenotazione/sanzione/blocco già
+ * esistente.
+ */
+export async function salvaAulaStudioPrenotazioniAttive(
+  db: Firestore,
+  tipoScuola: 'medie' | 'ipi',
+  attivo: boolean
+): Promise<void> {
+  const campo = tipoScuola === 'medie' ? 'prenotazioniAttiveMedie' : 'prenotazioniAttiveIpi';
+  await setDoc(doc(db, COLLEZIONI_AULA_STUDIO.CONFIG, AULA_STUDIO_CONFIG_GENERALE_ID), { [campo]: attivo }, { merge: true });
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
 // future senza richiederlo mai più.
 // ============================================================================
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { salvaProfiloAulaStudio } from './aula-studio-data';
 import { AulaStudioSharedProps } from './aula-studio-types';
@@ -75,7 +75,15 @@ export default function AulaStudioRegistrazioneWizard(props: AulaStudioSharedPro
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
+    // KeyboardAvoidingView + ScrollView, come nella schermata principale "Completa il tuo
+    // profilo": senza, con la tastiera aperta sul campo "Numero di registro" (passo 3) il
+    // pulsante di conferma poteva restare coperto/irraggiungibile su schermi piccoli.
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 80}
+    >
+    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
       <Text style={styles.titolo}>{t('aulaStudioRegistrazioneTitolo', lang)}</Text>
       <Text style={styles.sottotitolo}>{t('aulaStudioRegistrazioneSottotitolo', lang)}</Text>
 
@@ -197,6 +205,7 @@ export default function AulaStudioRegistrazioneWizard(props: AulaStudioSharedPro
         </View>
       )}
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
