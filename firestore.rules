@@ -14,10 +14,9 @@ rules_version = '2';
 // Ogni gruppo accetta anche il permesso concesso dal Direttore nella tabella
 // permessi (campo permessiSovrascritti sul profilo utente).
 //
-// Le collection operative di Aula Studio (prenotazioni studenti, contatori,
-// turni, sanzioni, blocchi) restano aperte agli utenti autenticati: studenti,
-// insegnanti di turno e responsabili ci scrivono con logiche intrecciate
-// (transazioni, waitlist, scadenze lato client) e vanno ristrette a parte.
+// Restano aperti a tutti gli utenti autenticati solo i contatori posti di
+// Aula Studio (aggiornati dalle transazioni degli studenti) e le eventuali
+// collection non elencate qui sotto.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -259,6 +258,82 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
+    // Aula Studio — operatività (prenotazioni, turni, pallini, blocchi)
+    // "Appello" = chi gestisce Aula Studio + insegnanti (l'insegnante di turno
+    // apre l'appello della sua fascia: le regole non possono verificare il
+    // turno specifico, perché i documenti turno hanno id casuali).
+    // ------------------------------------------------------------------
+
+    function appelloAulaStudio() {
+      return aulaStudioStaff() || ruoloOPermesso(['insegnante'], '_nessuno');
+    }
+
+    // Promozione dalla lista d'attesa: quando uno studente cancella una
+    // prenotazione confermata, il suo client promuove il primo in attesa.
+    function soloPromozioneWaitlist() {
+      return campiCambiati().hasOnly(['stato'])
+        && resource.data.stato == 'In attesa'
+        && request.resource.data.stato == 'Confermata';
+    }
+
+    match /aulaStudioPrenotazioni/{id} {
+      // Servono a tutti: controllo doppie prenotazioni, posti, lista d'attesa.
+      allow read: if autenticato();
+
+      // Lo studente prenota solo a proprio nome; l'aggiunta manuale la fa l'appello.
+      allow create: if autenticato() && (
+        (request.resource.data.utenteUid == request.auth.uid
+          && request.resource.data.prenotazioneManuale == false
+          && request.resource.data.statoPresenza == 'Non verificato'
+          && request.resource.data.stato in ['Confermata', 'In attesa'])
+        || appelloAulaStudio()
+      );
+
+      allow update: if appelloAulaStudio() || (autenticato() && soloPromozioneWaitlist());
+
+      allow delete: if appelloAulaStudio()
+        || (autenticato() && resource.data.utenteUid == request.auth.uid);
+    }
+
+    // Contatori posti: aggiornati nelle transazioni di prenotazione/cancellazione degli studenti.
+    match /aulaStudioContatori/{id} {
+      allow read, write: if autenticato();
+    }
+
+    match /aulaStudioTurni/{id} {
+      allow read: if autenticato();
+
+      // L'insegnante chiede un turno a proprio nome; il responsabile può assegnarlo già confermato.
+      allow create: if aulaStudioStaff()
+        || (autenticato()
+            && request.resource.data.insegnanteUid == request.auth.uid
+            && request.resource.data.stato == 'in attesa');
+
+      // Conferma/rifiuto: responsabili. Scadenza automatica: qualunque client che la rileva.
+      allow update: if aulaStudioStaff()
+        || (autenticato()
+            && campiCambiati().hasOnly(['stato'])
+            && resource.data.stato == 'in attesa'
+            && request.resource.data.stato == 'scaduta');
+
+      allow delete: if aulaStudioStaff();
+    }
+
+    // Pallini rossi: li dà l'appello, li toglie solo chi gestisce Aula Studio.
+    match /aulaStudioSanzioni/{id} {
+      allow read: if autenticato();
+      allow create: if appelloAulaStudio();
+      allow update, delete: if aulaStudioStaff();
+    }
+
+    // Blocchi (provvedimenti al terzo pallino), decisi durante l'appello.
+    match /aulaStudioBlocchi/{id} {
+      allow read: if autenticato();
+      allow create, delete: if appelloAulaStudio();
+      allow update: if aulaStudioStaff();
+    }
+
+    // ------------------------------------------------------------------
     // Tutto il resto (incluse le collection operative di Aula Studio):
     // invariato, basta essere autenticati. NB: le collection già regolate
     // sopra vanno escluse qui, altrimenti questa regola le riaprirebbe
@@ -269,7 +344,8 @@ service cloud.firestore {
       allow read, write: if autenticato() && !(collezione in [
         'users', 'allowed_domains', 'aule', 'sezioni', 'classi', 'configurazione', 'manuali',
         'prenotazioni', 'manutenzione', 'notifiche', 'registro_attivita',
-        'aulaStudioAule', 'aulaStudioConfig'
+        'aulaStudioAule', 'aulaStudioConfig', 'aulaStudioPrenotazioni', 'aulaStudioContatori',
+        'aulaStudioTurni', 'aulaStudioSanzioni', 'aulaStudioBlocchi'
       ]);
     }
   }
