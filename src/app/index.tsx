@@ -56,6 +56,7 @@ import {
 } from '@/components/aula-studio/aula-studio-constants';
 import { salvaProfiloAulaStudio, useAulaStudioPrenotazioniAttive, salvaAulaStudioPrenotazioniAttive } from '@/components/aula-studio/aula-studio-data';
 import ConfigWizard from '@/components/config-wizard/config-wizard';
+import { BarraAggiornamentiApp, EditorVersioneApk } from '@/components/aggiornamenti-app';
 import { fasceOrarieAuleComeStringhe, useFasceOrarieAule } from '@/components/config-wizard/config-wizard-fasce-aule-data';
 import { useRegolePrenotazioneAule } from '@/components/config-wizard/config-wizard-regole-prenotazione-data';
 import { numArabo, dataArabo } from '@/utils/numeri-arabo';
@@ -4768,6 +4769,9 @@ export default function App() {
     <SafeAreaView style={[styles.container, isRTL && { direction: 'rtl' }]}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
 
+      {/* Avvisi di aggiornamento dell'app (solo Android/iOS) */}
+      <BarraAggiornamentiApp db={db} lang={lang as any} colors={colors as any} />
+
       {/* ==========================================================
           HEADER (con nome cliccabile per profilo personale)
           ========================================================== */}
@@ -7332,6 +7336,8 @@ export default function App() {
                       </View>
                     );
                   })}
+
+                  <EditorVersioneApk db={db} lang={lang as any} colors={colors as any} mostraAlert={mostraAlert} />
                 </View>
               )}
 
