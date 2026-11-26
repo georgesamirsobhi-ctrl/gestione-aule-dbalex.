@@ -10,7 +10,7 @@ import { Alert, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, Toucha
 import AulaStudioFasceEditor from './aula-studio-fasce-editor';
 import AulaStudioFerieEditor from './aula-studio-ferie-editor';
 import { numArabo } from '../../utils/numeri-arabo';
-import { aulaStudioTipoScuolaConsentito, TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
+import { aulaStudioTipoScuolaConsentito, puoEliminareAuleAulaStudio, TIPI_REGISTRO_AULA_STUDIO } from './aula-studio-constants';
 import {
   aggiungiAulaStudioAula,
   eliminaAulaStudioAula,
@@ -107,11 +107,15 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
   const nomiMesi = NOMI_MESI_BREVI[lang] || NOMI_MESI_BREVI.it;
 
   const { configPerAula } = useAulaStudioConfig(db);
-  const { aule } = useAulaStudioAule(db);
+  const { aule: auleTutte } = useAulaStudioAule(db);
 
   // ---- Interruttori prenotazioni attive/sospese per tipo scuola (Medie/IPI) ----
   // null = nessuna restrizione di ambito (es. Gestore): mostra entrambi gli interruttori.
   const ambitoRuolo = aulaStudioTipoScuolaConsentito(userRole);
+  // Chi è limitato a una scuola vede e configura solo le aule di quella scuola,
+  // come già avviene nella vista responsabile (lista prenotazioni/appello).
+  const aule = ambitoRuolo ? auleTutte.filter((a) => a.tipoScuola === ambitoRuolo) : auleTutte;
+  const puoEliminareAule = puoEliminareAuleAulaStudio(userRole);
   const { prenotazioniAttive } = useAulaStudioPrenotazioniAttive(db);
   const [cambiandoPrenotazioni, setCambiandoPrenotazioni] = useState<'medie' | 'ipi' | null>(null);
 
@@ -154,7 +158,7 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
   const apriNuovaAula = () => {
     setFormAulaNome('');
     setFormAulaNomeAr('');
-    setFormAulaTipo('medie');
+    setFormAulaTipo(ambitoRuolo || 'medie');
     setModaleAulaAperta({ modo: 'nuova' });
   };
 
@@ -174,8 +178,10 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
       const nuovoId = await aggiungiAulaStudioAula(db, {
         nome: formAulaNome.trim(),
         nomeAr: formAulaNomeAr.trim(),
-        tipoScuola: formAulaTipo,
-        ordine: aule.length,
+        // Un ruolo limitato a una scuola può creare aule solo di quella scuola.
+        tipoScuola: ambitoRuolo || formAulaTipo,
+        // L'ordine è globale (tutte le aule), non solo quelle visibili a questo ruolo.
+        ordine: auleTutte.length,
       });
       await registraAttivita(TIPI_REGISTRO_AULA_STUDIO.GESTIONE_AULE, `Aula Studio "${formAulaNome.trim()}" creata (${formAulaTipo})`);
       setAulaId(nuovoId);
@@ -183,7 +189,7 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
       await modificaAulaStudioAula(db, modaleAulaAperta.aula.id, {
         nome: formAulaNome.trim(),
         nomeAr: formAulaNomeAr.trim(),
-        tipoScuola: formAulaTipo,
+        tipoScuola: ambitoRuolo || formAulaTipo,
       });
       await registraAttivita(TIPI_REGISTRO_AULA_STUDIO.GESTIONE_AULE, `Aula Studio "${formAulaNome.trim()}" modificata`);
     }
@@ -313,9 +319,11 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
                   <TouchableOpacity style={styles.bottoneRimuovi} onPress={() => apriModificaAula(a)}>
                     <Text style={styles.bottoneRimuoviTextNeutro}>{t('modifica', lang) || 'Modifica'}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.bottoneRimuovi} onPress={() => eliminaAula(a)}>
-                    <Text style={styles.bottoneRimuoviText}>{t('elimina', lang) || 'Elimina'}</Text>
-                  </TouchableOpacity>
+                  {puoEliminareAule && (
+                    <TouchableOpacity style={styles.bottoneRimuovi} onPress={() => eliminaAula(a)}>
+                      <Text style={styles.bottoneRimuoviText}>{t('elimina', lang) || 'Elimina'}</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))}
@@ -348,6 +356,8 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
               <View style={{ height: 8 }} />
               <TextInput style={[styles.input, { textAlign: 'right' }]} placeholder="الاسم (بالعربية)" placeholderTextColor={colors.placeholder} value={formAulaNomeAr} onChangeText={setFormAulaNomeAr} />
               <View style={{ height: 12 }} />
+              {/* Il tipo scuola si sceglie solo se il ruolo non è limitato a una scuola. */}
+              {!ambitoRuolo && (
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={[styles.chipAula, { flex: 1, alignItems: 'center' }, formAulaTipo === 'medie' && styles.chipAulaAttiva]} onPress={() => setFormAulaTipo('medie')}>
                   <Text style={[styles.chipAulaText, formAulaTipo === 'medie' && styles.chipAulaTextAttiva]}>{lang === 'ar' ? 'الإعدادية' : 'Medie'}</Text>
@@ -356,6 +366,7 @@ export default function AulaStudioImpostazioni(props: AulaStudioSharedProps) {
                   <Text style={[styles.chipAulaText, formAulaTipo === 'ipi' && styles.chipAulaTextAttiva]}>{lang === 'ar' ? 'المعهد الصناعي' : 'IPI'}</Text>
                 </TouchableOpacity>
               </View>
+              )}
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
                 <TouchableOpacity style={{ paddingVertical: 10, paddingHorizontal: 14 }} onPress={() => setModaleAulaAperta(null)}>
                   <Text style={{ color: colors.textMuted, fontWeight: '600' }}>{t('annulla', lang) || 'Annulla'}</Text>

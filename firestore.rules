@@ -1,0 +1,276 @@
+rules_version = '2';
+
+// Regole Firestore per Gestione Aule DBALEX.
+//
+// Principio: ogni collection ha regole proprie che rispecchiano i permessi
+// già usati nell'app (src/app/index.tsx, aula-studio-constants.ts). Le liste
+// di ruoli qui sotto DEVONO restare allineate a quelle funzioni:
+//   staffUtenti      -> puoGestireUtenti / puoModificareProfili / blocchi
+//   approvatori      -> puoApprovarePrenotazioni
+//   strutturaStaff   -> puoGestireAule
+//   classiStaff      -> puoGestireClassi
+//   manutenzioneStaff-> puoGestireManutenzione
+//   aulaStudioStaff  -> puoGestireAulaStudio
+// Ogni gruppo accetta anche il permesso concesso dal Direttore nella tabella
+// permessi (campo permessiSovrascritti sul profilo utente).
+//
+// Le collection operative di Aula Studio (prenotazioni studenti, contatori,
+// turni, sanzioni, blocchi) restano aperte agli utenti autenticati: studenti,
+// insegnanti di turno e responsabili ci scrivono con logiche intrecciate
+// (transazioni, waitlist, scadenze lato client) e vanno ristrette a parte.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------------
+    // Funzioni di supporto
+    // ------------------------------------------------------------------
+
+    function autenticato() {
+      return request.auth != null;
+    }
+
+    function haProfilo() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function mioProfilo() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function mioRuolo() {
+      return mioProfilo().get('role', 'utente');
+    }
+
+    // Permesso concesso esplicitamente dal Direttore nella tabella permessi.
+    function haOverride(chiave) {
+      let o = mioProfilo().get('permessiSovrascritti', null);
+      return o != null && o.get(chiave, false) == true;
+    }
+
+    // Utente autenticato con profilo e un ruolo tra quelli indicati, oppure con il permesso sovrascritto.
+    function ruoloOPermesso(ruoli, permesso) {
+      return autenticato() && haProfilo() && (mioRuolo() in ruoli || haOverride(permesso));
+    }
+
+    function staffUtenti() {
+      return autenticato() && haProfilo() && (
+        mioRuolo() in ['gestore', 'economo', 'segreteria', 'segreteriaSBase',
+                       'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio']
+        || haOverride('puoGestireUtenti')
+        || haOverride('puoModificareProfili')
+        || haOverride('puoGestireBlocchi')
+      );
+    }
+
+    function approvatori() {
+      return ruoloOPermesso(['gestore', 'economo', 'TEVT', 'segreteriaTevt', 'segreteria', 'segreteriaSBase',
+                             'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'], 'puoApprovarePrenotazioni');
+    }
+
+    function strutturaStaff() {
+      return ruoloOPermesso(['gestore', 'economo', 'segreteria', 'segreteriaSBase',
+                             'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'], 'puoGestireAule');
+    }
+
+    function classiStaff() {
+      return ruoloOPermesso(['gestore', 'economo', 'segreteria', 'segreteriaSBase'], 'puoGestireClassi');
+    }
+
+    function manutenzioneStaff() {
+      return ruoloOPermesso(['gestore', 'economo', 'manutentore'], 'puoGestireManutenzione');
+    }
+
+    function aulaStudioStaff() {
+      return ruoloOPermesso(['gestore', 'presideAbm', 'presideIpi', 'vicePresideIpi', 'segreteria',
+                             'segreteriaSBase', 'assistenteAulaStudioIpi', 'assistenteAulaStudioMedie'],
+                            'puoGestireAulaStudio');
+    }
+
+    function direttore() {
+      return autenticato() && haProfilo() && mioRuolo() == 'gestore';
+    }
+
+    function puoAssegnarePermessi() {
+      return ruoloOPermesso(['gestore'], 'puoAssegnarePermessiRuoliPersonalizzati');
+    }
+
+    function campiCambiati() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // ------------------------------------------------------------------
+    // Utenti e accesso
+    // ------------------------------------------------------------------
+
+    // Cosa può cambiare un utente sul PROPRIO documento: preferenze, token
+    // notifiche, dati anagrafici, profilo Aula Studio... ma non privilegi.
+    // Unica modifica di ruolo consentita: la scelta Studente/Insegnante nella
+    // schermata "Completa profilo", partendo da un profilo non ancora completo.
+    function aggiornamentoSeStessoConsentito() {
+      let cambiati = campiCambiati();
+      return !cambiati.hasAny(['permessiSovrascritti', 'rolePersonalizzato', 'dataScadenza', 'creatoDaGestore'])
+        && (!cambiati.hasAny(['bloccato']) || request.resource.data.bloccato == true)
+        && (!cambiati.hasAny(['role']) || (
+              resource.data.get('role', 'utente') in ['utente', 'studente', 'insegnante']
+              && resource.data.get('profiloCompleto', false) != true
+              && request.resource.data.role in ['studente', 'insegnante']
+            ));
+    }
+
+    match /users/{uid} {
+      // Molte funzioni (notifiche ai responsabili, liste insegnanti...) leggono gli altri utenti.
+      allow read: if autenticato();
+
+      // Registrazione: il nuovo utente crea il proprio documento solo come
+      // 'utente' e senza privilegi. Lo staff crea gli utenti da "Aggiungi utente".
+      allow create: if autenticato() && (
+        staffUtenti()
+        || (request.auth.uid == uid
+            && request.resource.data.role == 'utente'
+            && !request.resource.data.keys().hasAny(['permessiSovrascritti', 'creatoDaGestore', 'bloccato'])
+            && request.resource.data.get('rolePersonalizzato', null) == null
+            && request.resource.data.get('dataScadenza', null) == null)
+      );
+
+      allow update: if autenticato()
+        && (staffUtenti() || (request.auth.uid == uid && aggiornamentoSeStessoConsentito()))
+        && (!campiCambiati().hasAny(['permessiSovrascritti']) || puoAssegnarePermessi());
+
+      // L'eliminazione definitiva passa da api/delete-user.js (Admin SDK, non soggetto a queste regole).
+      allow delete: if staffUtenti();
+    }
+
+    // Il controllo dominio in fase di registrazione avviene PRIMA che l'utente
+    // sia autenticato, quindi la lettura resta pubblica.
+    match /allowed_domains/{id} {
+      allow read: if true;
+      allow write: if staffUtenti() || ruoloOPermesso([], 'puoGestireDominiEmail');
+    }
+
+    // ------------------------------------------------------------------
+    // Struttura (aule, sezioni, classi, configurazione, manuali)
+    // Lettura per tutti gli utenti autenticati, scrittura solo a chi le gestisce.
+    // ------------------------------------------------------------------
+
+    match /aule/{id} {
+      allow read: if autenticato();
+      allow write: if strutturaStaff();
+    }
+
+    match /sezioni/{id} {
+      allow read: if autenticato();
+      allow write: if strutturaStaff();
+    }
+
+    match /classi/{id} {
+      allow read: if autenticato();
+      allow write: if classiStaff();
+    }
+
+    match /configurazione/{id} {
+      allow read: if autenticato();
+      allow write: if strutturaStaff();
+    }
+
+    match /manuali/{id} {
+      allow read: if autenticato();
+      allow write: if ruoloOPermesso(['gestore'], 'puoGestireManuali');
+    }
+
+    // ------------------------------------------------------------------
+    // Prenotazioni aule
+    // ------------------------------------------------------------------
+
+    match /prenotazioni/{id} {
+      allow read: if autenticato();
+
+      // Ognuno prenota a proprio nome. Nasce "In attesa", salvo:
+      //  - Direttore/Economo (approvazione automatica, RUOLI_AUTO_APPROVAZIONE);
+      //  - blocco aula creato da chi gestisce le aule.
+      allow create: if autenticato()
+        && request.resource.data.utenteEmail == request.auth.token.email
+        && (request.resource.data.stato == 'In attesa'
+            || ruoloOPermesso(['gestore', 'economo'], '_nessuno')
+            || (request.resource.data.get('bloccoGestore', false) == true && strutturaStaff()));
+
+      // Approvare/rifiutare: chi ha accesso a Gestione prenotazioni.
+      allow update: if approvatori();
+
+      // Cancellare: il richiedente, chi approva, chi gestisce le aule (blocchi).
+      allow delete: if autenticato() && (
+        resource.data.utenteEmail == request.auth.token.email
+        || approvatori()
+        || strutturaStaff()
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // Manutenzione
+    // ------------------------------------------------------------------
+
+    match /manutenzione/{id} {
+      allow read: if autenticato();
+      allow create: if autenticato();
+      allow update, delete: if manutenzioneStaff();
+    }
+
+    // ------------------------------------------------------------------
+    // Notifiche: ognuno vede, segna come lette e cancella solo le proprie.
+    // Chiunque può crearne per altri (es. avviso ai responsabili).
+    // ------------------------------------------------------------------
+
+    match /notifiche/{id} {
+      allow create: if autenticato();
+      // TEMPORANEO: le versioni vecchie dell'app leggono l'intera collection e filtrano
+      // sul telefono. Quando tutti avranno l'app nuova (query where utenteId == uid),
+      // sostituire questa riga con:
+      //   allow read: if autenticato() && resource.data.utenteId == request.auth.uid;
+      allow read: if autenticato();
+      allow delete: if autenticato() && resource.data.utenteId == request.auth.uid;
+      allow update: if autenticato() && resource.data.utenteId == request.auth.uid
+        && campiCambiati().hasOnly(['letta']);
+    }
+
+    // ------------------------------------------------------------------
+    // Registro attività: tutti scrivono a proprio nome, solo lo staff legge.
+    // Nessuno può modificare o cancellare le voci.
+    // ------------------------------------------------------------------
+
+    match /registro_attivita/{id} {
+      allow create: if autenticato() && request.resource.data.userId == request.auth.uid;
+      allow read: if ruoloOPermesso(['gestore', 'economo'], 'puoVedereRegistroAttivita');
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Aula Studio — configurazione e aule (solo chi gestisce Aula Studio)
+    // ------------------------------------------------------------------
+
+    match /aulaStudioAule/{id} {
+      allow read: if autenticato();
+      allow create, update: if aulaStudioStaff();
+      allow delete: if direttore();
+    }
+
+    match /aulaStudioConfig/{id} {
+      allow read: if autenticato();
+      allow write: if aulaStudioStaff();
+    }
+
+    // ------------------------------------------------------------------
+    // Tutto il resto (incluse le collection operative di Aula Studio):
+    // invariato, basta essere autenticati. NB: le collection già regolate
+    // sopra vanno escluse qui, altrimenti questa regola le riaprirebbe
+    // (in Firestore basta UNA regola che consenta).
+    // ------------------------------------------------------------------
+
+    match /{collezione}/{documento=**} {
+      allow read, write: if autenticato() && !(collezione in [
+        'users', 'allowed_domains', 'aule', 'sezioni', 'classi', 'configurazione', 'manuali',
+        'prenotazioni', 'manutenzione', 'notifiche', 'registro_attivita',
+        'aulaStudioAule', 'aulaStudioConfig'
+      ]);
+    }
+  }
+}

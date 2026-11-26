@@ -42,6 +42,8 @@ export interface ConfigWizardSharedProps {
   canGestireClassi: boolean;
   canGestireAule: boolean;
   canGestireAulaStudio: boolean;
+  /** Ruolo dell'utente: chi è limitato a una scuola (aulaStudioTipoScuolaConsentito) vede solo le Aule Studio di quella scuola. */
+  userRole: string;
   /** Elenco classi aggiornato (ricaricato dal parent dopo ogni scrittura del wizard). */
   classiLista: ClasseConTipo[];
   /** Elenco aule generali aggiornato (ricaricato dal parent dopo ogni scrittura del wizard). */

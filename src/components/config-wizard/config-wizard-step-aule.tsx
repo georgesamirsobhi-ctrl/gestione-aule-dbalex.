@@ -23,6 +23,7 @@ import {
   useAulaStudioConfig,
 } from '../aula-studio/aula-studio-data';
 import { AULA_STUDIO_CONFIG_DEFAULT, nomeAulaStudio } from '../aula-studio/aula-studio-utils';
+import { aulaStudioTipoScuolaConsentito, puoEliminareAuleAulaStudio } from '../aula-studio/aula-studio-constants';
 import { AulaStudioAula } from '../aula-studio/aula-studio-types';
 import { ConfigWizardSharedProps, SezioneScolastica } from './config-wizard-types';
 
@@ -39,8 +40,11 @@ type TabAulaStudio = { key: string; tipo: 'aulaStudio'; tipoScuola: 'medie' | 'i
 type Tab = TabGenerale | TabAulaStudio;
 
 export default function ConfigWizardStepAule(props: ConfigWizardSharedProps) {
-  const { db, lang, colors, t, mostraAlert, registraAttivita, canGestireAule, canGestireAulaStudio, aule, sezioniLista, onRicaricaDatiGenerali } = props;
+  const { db, lang, colors, t, mostraAlert, registraAttivita, canGestireAule, canGestireAulaStudio, userRole, aule, sezioniLista, onRicaricaDatiGenerali } = props;
   const styles = useMemo(() => getStyles(colors), [colors]);
+  // Chi è limitato a una scuola vede solo il tab Aula Studio di quella scuola; eliminare resta al Direttore.
+  const ambitoRuolo = aulaStudioTipoScuolaConsentito(userRole);
+  const puoEliminareAuleStudio = puoEliminareAuleAulaStudio(userRole);
 
   const { aule: auleStudio } = useAulaStudioAule(db);
   const { configPerAula } = useAulaStudioConfig(db);
@@ -56,10 +60,10 @@ export default function ConfigWizardStepAule(props: ConfigWizardSharedProps) {
       ? [
           { key: 'as:medie', tipo: 'aulaStudio', tipoScuola: 'medie', titolo: t('wizardConfigTabAulaStudioMedie', lang) },
           { key: 'as:ipi', tipo: 'aulaStudio', tipoScuola: 'ipi', titolo: t('wizardConfigTabAulaStudioIpi', lang) },
-        ]
+        ].filter((tab) => !ambitoRuolo || tab.tipoScuola === ambitoRuolo) as Tab[]
       : [];
     return [...generali, ...aulaStudio];
-  }, [canGestireAule, canGestireAulaStudio, sezioniLista, lang]);
+  }, [canGestireAule, canGestireAulaStudio, sezioniLista, lang, ambitoRuolo]);
 
   const [tabAttiva, setTabAttiva] = useState<string>('');
   useEffect(() => {
@@ -253,9 +257,11 @@ export default function ConfigWizardStepAule(props: ConfigWizardSharedProps) {
                   <TouchableOpacity style={styles.iconBtn} onPress={() => apriModificaAulaStudio(a)}>
                     <Text style={styles.iconBtnText}>{t('modifica', lang)}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.iconBtn} onPress={() => eliminaAulaStudio(a)}>
-                    <Text style={styles.iconBtnTextRimuovi}>{t('elimina', lang)}</Text>
-                  </TouchableOpacity>
+                  {puoEliminareAuleStudio && (
+                    <TouchableOpacity style={styles.iconBtn} onPress={() => eliminaAulaStudio(a)}>
+                      <Text style={styles.iconBtnTextRimuovi}>{t('elimina', lang)}</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))}

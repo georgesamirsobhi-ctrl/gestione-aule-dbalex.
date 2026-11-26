@@ -11,14 +11,21 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import AulaStudioFasceEditor from '../aula-studio/aula-studio-fasce-editor';
 import { salvaAulaStudioConfig, useAulaStudioAule, useAulaStudioConfig } from '../aula-studio/aula-studio-data';
+import { aulaStudioTipoScuolaConsentito } from '../aula-studio/aula-studio-constants';
 import { AULA_STUDIO_CONFIG_DEFAULT, FasciaOraria, nomeAulaStudio } from '../aula-studio/aula-studio-utils';
 import { ConfigWizardSharedProps } from './config-wizard-types';
 
 export default function ConfigWizardStepFasce(props: ConfigWizardSharedProps) {
-  const { db, lang, colors, t, mostraAlert } = props;
+  const { db, lang, colors, t, mostraAlert, userRole } = props;
   const styles = useMemo(() => getStyles(colors), [colors]);
 
-  const { aule } = useAulaStudioAule(db);
+  // Chi è limitato a una scuola configura solo le Aule Studio di quella scuola.
+  const { aule: auleTutte } = useAulaStudioAule(db);
+  const ambitoRuolo = aulaStudioTipoScuolaConsentito(userRole);
+  const aule = useMemo(
+    () => (ambitoRuolo ? auleTutte.filter((a) => a.tipoScuola === ambitoRuolo) : auleTutte),
+    [auleTutte, ambitoRuolo]
+  );
   const { configPerAula, caricamentoConfig } = useAulaStudioConfig(db);
 
   const [aulaId, setAulaId] = useState('');

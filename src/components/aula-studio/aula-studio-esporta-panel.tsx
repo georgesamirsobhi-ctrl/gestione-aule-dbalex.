@@ -11,6 +11,7 @@ import type { Firestore } from 'firebase/firestore';
 
 import AulaStudioCalendarioPopup from './aula-studio-calendario-popup';
 import { numArabo, dataArabo } from '../../utils/numeri-arabo';
+import { aulaStudioTipoScuolaConsentito } from './aula-studio-constants';
 import {
   useAulaStudioAule,
   useAulaStudioConfig,
@@ -27,11 +28,15 @@ interface Props {
   t: (key: string, lang: string, ...args: any[]) => any;
   mostraAlert: (titolo: string, messaggio: string) => void;
   scriviECondividiExcel: (nomeFile: string, righe: Record<string, any>[]) => Promise<void>;
+  /** Ruolo dell'utente: chi è limitato a una scuola esporta solo le aule di quella scuola. */
+  userRole: string;
 }
 
-export default function AulaStudioEsportaPanel({ db, lang, colors, t, mostraAlert, scriviECondividiExcel }: Props) {
+export default function AulaStudioEsportaPanel({ db, lang, colors, t, mostraAlert, scriviECondividiExcel, userRole }: Props) {
   const styles = useMemo(() => getStyles(colors), [colors]);
-  const { aule } = useAulaStudioAule(db);
+  const { aule: auleTutte } = useAulaStudioAule(db);
+  const ambitoRuolo = aulaStudioTipoScuolaConsentito(userRole);
+  const aule = ambitoRuolo ? auleTutte.filter((a) => a.tipoScuola === ambitoRuolo) : auleTutte;
   const [aulaId, setAulaId] = useState<string>('');
   const [dataSelezionata, setDataSelezionata] = useState<string>(oggiIso());
   const [giornoPopupAperto, setGiornoPopupAperto] = useState(false);

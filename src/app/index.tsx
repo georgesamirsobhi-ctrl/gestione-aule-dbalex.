@@ -16,7 +16,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from 'firebase/auth';
-import { addDoc, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -49,7 +49,11 @@ import AulaStudioImpostazioni from '@/components/aula-studio/aula-studio-imposta
 import AulaStudioResponsabileView from '@/components/aula-studio/aula-studio-responsabile-view';
 import AulaStudioStudentView from '@/components/aula-studio/aula-studio-student-view';
 import AulaStudioTurniView from '@/components/aula-studio/aula-studio-turni-view';
-import { puoGestireAulaStudio } from '@/components/aula-studio/aula-studio-constants';
+import {
+  puoGestireAulaStudio,
+  RUOLO_ASSISTENTE_AULA_STUDIO_IPI,
+  RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE,
+} from '@/components/aula-studio/aula-studio-constants';
 import { salvaProfiloAulaStudio, useAulaStudioPrenotazioniAttive, salvaAulaStudioPrenotazioniAttive } from '@/components/aula-studio/aula-studio-data';
 import ConfigWizard from '@/components/config-wizard/config-wizard';
 import { fasceOrarieAuleComeStringhe, useFasceOrarieAule } from '@/components/config-wizard/config-wizard-fasce-aule-data';
@@ -62,6 +66,7 @@ import {
   chiaveDaNomeSezione,
   chiaveSezione,
   oraInizioDaFasce,
+  aulaPassaATevtDopoLimite,
   puoApprovareRuolo,
   RUOLI_CON_AMBITO_APPROVAZIONE,
 } from '@/utils/regole-approvazione';
@@ -197,7 +202,13 @@ const calcolaEta = (dataNascita) => {
 
 const RUOLI_TIPO_SEGRETERIA = ['segreteria', 'segreteriaSBase', 'presideIpi', 'vicePresideIpi', 'presideAbm', 'oratorio'];
 // 'studente' e 'insegnante' sono ora ruoli veri e propri, selezionabili come tutti gli altri.
-const RUOLI_TUTTI = ['utente', 'TEVT', 'segreteriaTevt', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore'];
+// Solo questi ruoli passano dalla schermata "Completa profilo" (scelta Studente/Insegnante),
+// che sovrascrive il ruolo: un ruolo assegnato dal gestore (es. Economo, Assistente
+// Aula Studio) non deve mai essere rimpiazzato da quella scelta.
+const RUOLI_CON_SCELTA_TIPO = ['utente', 'studente', 'insegnante'];
+const deveCompletareProfilo = (dati) =>
+  !dati.profiloCompleto && RUOLI_CON_SCELTA_TIPO.includes(dati.role || 'utente') && !dati.rolePersonalizzato;
+const RUOLI_TUTTI = ['utente', 'TEVT', 'segreteriaTevt', 'studente', 'insegnante', 'gestore', 'economo', ...RUOLI_TIPO_SEGRETERIA, 'manutentore', RUOLO_ASSISTENTE_AULA_STUDIO_IPI, RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE];
 
 // Funzioni di permesso esistenti
 // Direttore (gestore) ed Economo hanno accesso totale. Restano solo del Direttore: reset dati,
@@ -323,6 +334,8 @@ const etichettaRuolo = (ruolo, currentLang) => {
   if (ruolo === 'oratorio') return currentLang === 'ar' ? 'الأوراتوريو' : 'ORATORIO';
   if (ruolo === 'TEVT') return currentLang === 'ar' ? 'TEVT' : 'TEVT';
   if (ruolo === 'segreteriaTevt') return currentLang === 'ar' ? 'سكرتارية TEVT' : 'SEGRETERIA TEVT';
+  if (ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_IPI) return currentLang === 'ar' ? 'مساعد قاعة الدراسة - المعهد الصناعي' : 'ASSISTENTE AULA STUDIO IPI';
+  if (ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE) return currentLang === 'ar' ? 'مساعد قاعة الدراسة - الإعدادية' : 'ASSISTENTE AULA STUDIO MEDIE';
   return currentLang === 'ar' ? 'مستخدم' : 'UTENTE';
 };
 
@@ -548,6 +561,8 @@ const t = (key, lang, ...args) => {
       richiesteRipetuteInviate: (n) => `${n} richieste inviate!`,
       alcuneDateSaltate: (n) => ` (${n} date saltate perché l'aula era già occupata da un altro utente)`,
       bloccaAula: 'Blocca',
+      passaATevtDopo16: 'Dopo le 16 passa al TEVT',
+      passaATevtSpiegazione: 'Fino alle 16 approvano Preside IPI, Vice Preside IPI e Segreteria IPI; dalle 16 in poi Responsabile TEVT e Segreteria TEVT (come le classi seconde).',
       sospendiPrenotazioni: 'Sospendi',
       riattivaPrenotazioni: 'Riattiva',
       sospesaBadge: '⏸ Sospesa',
@@ -1087,6 +1102,8 @@ const t = (key, lang, ...args) => {
       richiesteRipetuteInviate: (n) => `تم إرسال ${n} طلبات!`,
       alcuneDateSaltate: (n) => ` (تم تخطي ${n} تواريخ لأن القاعة كانت محجوزة من مستخدم آخر)`,
       bloccaAula: 'حظر',
+      passaATevtDopo16: 'بعد الساعة ١٦:٠٠ تنتقل إلى TEVT',
+      passaATevtSpiegazione: 'حتى الساعة ١٦:٠٠ توافق عليها إدارة IPI (المدير والنائب والسكرتارية)؛ ومن الساعة ١٦:٠٠ فصاعدًا مسؤول TEVT وسكرتارية TEVT (مثل فصول السنة الثانية).',
       sospendiPrenotazioni: 'تعليق',
       riattivaPrenotazioni: 'إعادة التفعيل',
       sospesaBadge: '⏸ معلّقة',
@@ -1844,6 +1861,7 @@ export default function App() {
   const [nomeNuovaAula, setNomeNuovaAula] = useState('');
   const [nomeNuovaAulaAr, setNomeNuovaAulaAr] = useState('');
   const [capienzaNuovaAula, setCapienzaNuovaAula] = useState('');
+  const [passaATevtNuovaAula, setPassaATevtNuovaAula] = useState(false);
 
   // ---- BLOCCO AULA ----
   const [modalBloccoAula, setModalBloccoAula] = useState(false);
@@ -2074,6 +2092,10 @@ export default function App() {
 
         setUserName(nome.trim());
         setUserRole('utente');
+        // Il listener onAuthStateChanged legge users/{uid} prima che setDoc sia
+        // completato, quindi non può impostare questo flag: lo facciamo qui, così
+        // dopo la verifica email compare subito la schermata "Completa profilo".
+        setProfiloDaCompletare(true);
 
       } else {
         // ---- LOGIN ----
@@ -2130,7 +2152,7 @@ export default function App() {
           }
 
           // 6. Controllo se profilo completo
-          if (!datiUtente.profiloCompleto) {
+          if (deveCompletareProfilo(datiUtente)) {
             setProfiloDaCompletare(true);
           } else {
             setProfiloDaCompletare(false);
@@ -2509,10 +2531,11 @@ export default function App() {
       setManutenzioneLista(snapManutenzione.docs.map(d => ({ id: d.id, ...d.data() })));
 
       if (user) {
-        const snapNotifiche = await getDocs(collection(db, 'notifiche'));
+        // Solo le proprie notifiche: le regole Firestore non permettono di leggere quelle altrui.
+        // (Ordinamento lato client per non richiedere un indice composto.)
+        const snapNotifiche = await getDocs(query(collection(db, 'notifiche'), where('utenteId', '==', user.uid)));
         const mieNotifiche = snapNotifiche.docs
           .map(d => ({ id: d.id, ...(d.data() as any) }))
-          .filter(n => n.utenteId === user.uid)
           .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         setNotificheLista(mieNotifiche);
       }
@@ -2583,7 +2606,7 @@ export default function App() {
           setEmailNonVerificata(!firebaseUser.emailVerified && !bypassVerificaEmail);
 
           // Controllo profilo completo
-          if (!datiUtente.profiloCompleto) {
+          if (deveCompletareProfilo(datiUtente)) {
             setProfiloDaCompletare(true);
           } else {
             setProfiloDaCompletare(false);
@@ -3099,6 +3122,7 @@ export default function App() {
     setNomeNuovaAula('');
     setNomeNuovaAulaAr('');
     setCapienzaNuovaAula('');
+    setPassaATevtNuovaAula(false);
     setModalNuovaAula(true);
   };
 
@@ -3107,9 +3131,11 @@ export default function App() {
     setNomeNuovaAula(aula.nome);
     setNomeNuovaAulaAr(aula.nomeAr || '');
     setCapienzaNuovaAula(String(aula.capienza));
+    setPassaATevtNuovaAula(aulaPassaATevtDopoLimite(aula));
     setModalNuovaAula(true);
   };
 
+  const sezioneProfessionaleSel = chiaveDaNomeSezione(sezioneSelezionata, sezioniLista) === 'professionale';
   const salvaAula = async () => {
     if (!nomeNuovaAula.trim() || !capienzaNuovaAula.trim()) {
       mostraAlert(t('attenzione', lang), t('inserisciNomeCapienza', lang));
@@ -3120,7 +3146,8 @@ export default function App() {
         await updateDoc(doc(db, 'aule', aulaInModifica.id), {
           nome: nomeNuovaAula.trim(),
           nomeAr: nomeNuovaAulaAr.trim(),
-          capienza: capienzaNuovaAula.trim()
+          capienza: capienzaNuovaAula.trim(),
+          ...(sezioneProfessionaleSel ? { passaATevt: passaATevtNuovaAula } : {})
         });
         await registraAttivita(
           TIPI_REGISTRO.MODIFICA_AULA,
@@ -3133,7 +3160,8 @@ export default function App() {
           nomeAr: nomeNuovaAulaAr.trim(),
           capienza: capienzaNuovaAula.trim(),
           sezione: sezioneSelezionata,
-          ordine: auleSezione.length
+          ordine: auleSezione.length,
+          ...(sezioneProfessionaleSel ? { passaATevt: passaATevtNuovaAula } : {})
         });
         await registraAttivita(
           TIPI_REGISTRO.AGGIUNTA_AULA,
@@ -3474,7 +3502,9 @@ export default function App() {
         annoScolastico: null,
         dataNascita: null,
         classe: null,
-        profiloCompleto: false,
+        // Chi riceve dal gestore un ruolo diverso da utente/studente/insegnante
+        // non passa dalla scelta Studente/Insegnante (che sovrascriverebbe il ruolo).
+        profiloCompleto: !deveCompletareProfilo({ role: ruoloFinale, rolePersonalizzato: ruoloPersonalizzato }),
         rolePersonalizzato: ruoloPersonalizzato,
         dataScadenza: isTemporaneo ? dataScadenzaUtente : null
       });
@@ -4231,6 +4261,7 @@ export default function App() {
       sezione: chiaveDaNomeSezione(aulaDi?.sezione || sezione, sezioniLista),
       anno: aulaDi?.anno ?? null,
       oraInizio: oraInizioDaFasce(fasce),
+      passaATevt: aulaPassaATevtDopoLimite(aulaDi),
     };
   };
   const puoApprovareUtenteQuesta = (utente, ctx) => {
@@ -4392,7 +4423,15 @@ export default function App() {
               {Platform.OS === 'web' && (
                 <TouchableOpacity
                   style={styles.androidDownloadBanner}
-                  onPress={() => setShowDownloadChoice(true)}
+                  onPress={() => {
+                    // Da un telefono Android scarica direttamente l'APK; da un computer mostra il QR code da inquadrare col telefono.
+                    if (typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent)) {
+                      Linking.openURL(APK_DOWNLOAD_URL);
+                    } else {
+                      setShowQrCode(true);
+                      setShowDownloadChoice(true);
+                    }
+                  }}
                 >
                   <Text style={styles.androidDownloadBannerTitle}>{t('scaricaAppAndroidTitolo', lang)}</Text>
                   <Text style={styles.androidDownloadBannerButton}>{t('scaricaAppAndroidPulsante', lang)}</Text>
@@ -4410,15 +4449,6 @@ export default function App() {
                       {!showQrCode ? (
                         <>
                           <Text style={qrStyles.title}>{lang === 'ar' ? 'تحميل على:' : 'Scarica su:'}</Text>
-                          <TouchableOpacity
-                            style={qrStyles.choiceBtn}
-                            onPress={() => {
-                              Linking.openURL(APK_DOWNLOAD_URL);
-                              setShowDownloadChoice(false);
-                            }}
-                          >
-                            <Text style={qrStyles.choiceBtnText}>💻 PC / Windows</Text>
-                          </TouchableOpacity>
                           <TouchableOpacity
                             style={qrStyles.choiceBtn}
                             onPress={() => setShowQrCode(true)}
@@ -6208,6 +6238,7 @@ export default function App() {
                   canGestireClassi={canGestireClassi}
                   canGestireAule={canGestireAule}
                   canGestireAulaStudio={canGestireAulaStudio}
+                  userRole={userRole}
                   classiLista={classiLista}
                   aule={aule}
                   sezioniLista={sezioniLista}
@@ -6961,6 +6992,7 @@ export default function App() {
                       t={t}
                       mostraAlert={mostraAlert}
                       scriviECondividiExcel={scriviECondividiExcel}
+                      userRole={userRole}
                     />
                   )}
 
@@ -7469,7 +7501,7 @@ export default function App() {
                             <TouchableOpacity style={[styles.dropdownOption, filtriProfili.ruolo === 'tutti' && styles.dropdownOptionActive]} onPress={() => { setFiltriProfili(prev => ({ ...prev, ruolo: 'tutti' })); setFiltroRuoloProfiliDropdownAperto(false); }}>
                               <Text style={[styles.dropdownOptionText, filtriProfili.ruolo === 'tutti' && styles.dropdownOptionTextActive]}>{t('tutte', lang)}</Text>
                             </TouchableOpacity>
-                            {['utente','studente','insegnante','gestore','economo','segreteria','presideIpi','vicePresideIpi','presideAbm','oratorio','TEVT','segreteriaTevt','manutentore'].map(r => {
+                            {RUOLI_TUTTI.map(r => {
                               const attivo = filtriProfili.ruolo === r;
                               return (
                                 <TouchableOpacity key={r} style={[styles.dropdownOption, attivo && styles.dropdownOptionActive]} onPress={() => { setFiltriProfili(prev => ({ ...prev, ruolo: r })); setFiltroRuoloProfiliDropdownAperto(false); }}>
@@ -7871,6 +7903,17 @@ export default function App() {
               <TextInput style={[styles.input, { textAlign: 'right' }]} placeholder={t('nomeAulaArPlaceholder', lang)} placeholderTextColor={colors.placeholder} value={nomeNuovaAulaAr} onChangeText={setNomeNuovaAulaAr} />
               <Text style={styles.label}>{t('capienza', lang)}:</Text>
               <TextInput style={styles.input} placeholder={t('capienza', lang)} placeholderTextColor={colors.placeholder} keyboardType="numeric" value={capienzaNuovaAula} onChangeText={setCapienzaNuovaAula} />
+              {sezioneProfessionaleSel && (
+                <>
+                  <TouchableOpacity style={[styles.checkboxRow, { marginTop: 14 }]} onPress={() => setPassaATevtNuovaAula(!passaATevtNuovaAula)}>
+                    <View style={[styles.checkboxBox, passaATevtNuovaAula && styles.checkboxBoxChecked]}>
+                      {passaATevtNuovaAula && <Text style={styles.checkboxCheckmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.checkboxLabel}>{t('passaATevtDopo16', lang)}</Text>
+                  </TouchableOpacity>
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>{t('passaATevtSpiegazione', lang)}</Text>
+                </>
+              )}
             </ScrollView>
             <View style={styles.modalFooterFixed}>
               <TouchableOpacity style={styles.primaryButton} onPress={salvaAula}>

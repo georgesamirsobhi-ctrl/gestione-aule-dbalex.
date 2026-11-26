@@ -62,8 +62,27 @@ export function puoGestireAulaStudio(ruolo: string): boolean {
     ruolo === 'presideIpi' ||
     ruolo === 'vicePresideIpi' ||
     ruolo === 'segreteria' ||
-    ruolo === 'segreteriaSBase'
+    ruolo === 'segreteriaSBase' ||
+    ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_IPI ||
+    ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE
   );
+}
+
+/**
+ * Ruoli dedicati alla sola gestione di Aula Studio (lista prenotazioni, appello,
+ * turni insegnanti, impostazioni), ciascuno limitato alla propria scuola tramite
+ * aulaStudioTipoScuolaConsentito. Non hanno altri permessi nell'app.
+ */
+export const RUOLO_ASSISTENTE_AULA_STUDIO_IPI = 'assistenteAulaStudioIpi';
+export const RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE = 'assistenteAulaStudioMedie';
+
+/**
+ * Eliminare un'aula di Aula Studio cancella di fatto il suo storico di riferimento:
+ * resta riservato al Direttore. Aggiungere/rinominare/riordinare resta a chi
+ * gestisce Aula Studio, limitato alle aule della propria scuola.
+ */
+export function puoEliminareAuleAulaStudio(ruolo: string): boolean {
+  return ruolo === 'gestore';
 }
 
 /**
@@ -73,8 +92,8 @@ export function puoGestireAulaStudio(ruolo: string): boolean {
  * vede e gestisce tutte le aule.
  */
 export function aulaStudioTipoScuolaConsentito(ruolo: string): 'medie' | 'ipi' | null {
-  if (ruolo === 'presideAbm' || ruolo === 'segreteriaSBase') return 'medie';
-  if (ruolo === 'presideIpi' || ruolo === 'vicePresideIpi' || ruolo === 'segreteria') return 'ipi';
+  if (ruolo === 'presideAbm' || ruolo === 'segreteriaSBase' || ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_MEDIE) return 'medie';
+  if (ruolo === 'presideIpi' || ruolo === 'vicePresideIpi' || ruolo === 'segreteria' || ruolo === RUOLO_ASSISTENTE_AULA_STUDIO_IPI) return 'ipi';
   return null;
 }
 

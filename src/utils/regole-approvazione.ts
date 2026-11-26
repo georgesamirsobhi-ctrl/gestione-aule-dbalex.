@@ -10,7 +10,9 @@
 //      · classi prime, terze (e senza anno): Preside IPI, Vice Preside IPI,
 //        Segreteria IPI;
 //      · classi seconde: fino alle 16:00 (ora di INIZIO della prenotazione) gli
-//        stessi tre; dalle 16:00 in poi Responsabile TEVT + Segreteria TEVT.
+//        stessi tre; dalle 16:00 in poi Responsabile TEVT + Segreteria TEVT;
+//      · aule con la casella "Dopo le 16 passa al TEVT" (di base Aula Multimediale e
+//        Laboratorio Informatica): come le classi seconde.
 //  - TEVT: Responsabile TEVT + Segreteria TEVT.
 //  - Comuni: Oratorio (oltre a Direttore ed Economo).
 //  - Sezione sconosciuta (aggiunta a mano): solo Direttore ed Economo.
@@ -104,12 +106,25 @@ export function oraInizioDaFasce(fasce?: string[] | null): string | null {
   return inizi.length > 0 ? inizi[0] : null;
 }
 
+/**
+ * L'aula segue la regola "dopo le 16 passa al TEVT"? Vale la casella salvata sull'aula;
+ * se non è mai stata impostata, si riconoscono dal nome le aule multimediale e informatica.
+ */
+export function aulaPassaATevtDopoLimite(aula?: { nome?: string; nomeAr?: string; passaATevt?: boolean | null } | null): boolean {
+  if (!aula) return false;
+  if (aula.passaATevt === true) return true;
+  if (aula.passaATevt === false) return false;
+  return /multimedial|informatic|المتعدد|الإعلام|الحاسوب/i.test(`${aula.nome || ''} ${aula.nomeAr || ''}`);
+}
+
 export interface ContestoApprovazione {
   sezione: ChiaveSezione | null;
   /** Anno della classe prenotata (solo Scuola Professionale). */
   anno?: number | null;
   /** Ora di inizio della prenotazione, 'HH:MM'. */
   oraInizio?: string | null;
+  /** L'aula prenotata passa al TEVT dopo le 16:00 (come le classi seconde). */
+  passaATevt?: boolean;
 }
 
 /** Elenco dei ruoli che possono approvare una prenotazione con questo contesto. */
@@ -127,7 +142,7 @@ export function ruoliApprovatori(ctx: ContestoApprovazione): string[] {
       break;
     case 'professionale': {
       const dopoLimite = !!ctx.oraInizio && ctx.oraInizio >= ORA_LIMITE_SECONDE_IPI;
-      if (ctx.anno === 2 && dopoLimite) ruoli.push(...RUOLI_TEVT);
+      if ((ctx.anno === 2 || ctx.passaATevt) && dopoLimite) ruoli.push(...RUOLI_TEVT);
       else ruoli.push(...RUOLI_IPI);
       break;
     }
